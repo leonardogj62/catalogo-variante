@@ -1,0 +1,1566 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2c4a3e">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Catálogo">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Catálogo por Variante</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+  :root{
+    --ink:#1c1d1f;
+    --paper:#fafaf8;
+    --line:#d8d6cf;
+    --accent:#2c4a3e;
+    --accent-soft:#e7ede9;
+    --warn:#8a4b2e;
+    --mono: 'SF Mono', 'Consolas', monospace;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background:var(--paper);
+    color:var(--ink);
+  }
+  .topbar{
+    position:sticky;
+    top:0;
+    z-index:50;
+    background:#fff;
+    border-bottom:1px solid var(--line);
+    padding:14px 18px;
+  }
+  h1{
+    font-size:17px;
+    font-weight:600;
+    margin:0 0 2px;
+    letter-spacing:-0.01em;
+  }
+  .sub{
+    color:#6b6a64;
+    font-size:12.5px;
+    margin:0;
+  }
+  .layout{
+    display:flex;
+    flex-direction:column;
+    gap:0;
+  }
+  .bookCol{
+    padding:18px;
+    padding-bottom:140px; /* leave room so the bottom sheet never covers the last page */
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:18px;
+  }
+  /* ---- Mobile: bottom sheet ---- */
+  .sideCol{
+    position:fixed;
+    left:0; right:0; bottom:0;
+    z-index:60;
+    background:#fff;
+    border-top:1px solid var(--line);
+    border-radius:14px 14px 0 0;
+    box-shadow:0 -4px 16px rgba(0,0,0,.12);
+    max-height:72vh;
+    display:flex;
+    flex-direction:column;
+    transition:max-height .2s ease;
+  }
+  .sideCol.collapsed{
+    max-height:54px;
+  }
+  .sheetHandle{
+    flex-shrink:0;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:13px 16px;
+    cursor:pointer;
+    user-select:none;
+  }
+  .sheetHandle .grip{
+    width:36px; height:4px;
+    background:var(--line);
+    border-radius:3px;
+    position:absolute;
+    top:6px; left:50%;
+    transform:translateX(-50%);
+  }
+  .sheetHandle b{font-size:13px;}
+  .sheetHandle .sheetCount{
+    font-size:12px;
+    color:var(--accent);
+    background:var(--accent-soft);
+    padding:2px 8px;
+    border-radius:10px;
+    margin-left:8px;
+  }
+  .sheetBody{
+    overflow-y:auto;
+    padding:0 16px 16px;
+    display:flex;
+    flex-direction:column;
+    gap:14px;
+  }
+  .sideCol.collapsed .sheetBody{display:none;}
+
+  /* ---- Desktop: side-by-side sticky sidebar ---- */
+  @media (min-width: 900px){
+    .layout{flex-direction:row;}
+    .bookCol{flex:1; min-width:0; padding-bottom:18px;}
+    .sideCol{
+      position:sticky;
+      top:0;
+      left:auto; right:auto; bottom:auto;
+      width:340px;
+      flex-shrink:0;
+      border-left:1px solid var(--line);
+      border-top:none;
+      border-radius:0;
+      box-shadow:none;
+      max-height:100vh;
+      height:100vh;
+    }
+    .sideCol.collapsed{max-height:100vh;}
+    .sheetHandle{display:none;}
+    .sideCol .sheetBody{display:flex !important; padding:18px;}
+  }
+  .pageWrap{
+    position:relative;
+    border:1px solid var(--line);
+    border-radius:6px;
+    box-shadow:0 1px 3px rgba(0,0,0,.06);
+    background:#fff;
+    line-height:0;
+    max-width:100%;
+  }
+  .pageWrap canvas.basePage{
+    display:block;
+    max-width:100%;
+    height:auto;
+  }
+  .pageWrap .selOverlay{
+    position:absolute;
+    top:0; left:0;
+    width:100%; height:100%;
+    cursor:crosshair;
+    touch-action:pan-y;
+  }
+  .pageLabel{
+    font-size:11px;
+    color:#999;
+    text-transform:uppercase;
+    letter-spacing:.04em;
+  }
+  .cover-flag{
+    font-size:11px;
+    color:var(--warn);
+    background:#fbeee6;
+    border-radius:5px;
+    padding:3px 8px;
+    margin-left:6px;
+  }
+  .rectBox{
+    position:absolute;
+    border:2px solid #e0593e;
+    background:rgba(224,89,62,0.12);
+    box-sizing:border-box;
+  }
+  .rectBox.rectBox-text{
+    border-color:#2f9e57;
+    background:rgba(47,158,87,0.12);
+  }
+  .rectBox.rectBox-care{
+    border-color:#7b4fae;
+    background:rgba(123,79,174,0.12);
+  }
+  .rectBox .rectTag{
+    position:absolute;
+    top:-22px;
+    left:-2px;
+    background:#e0593e;
+    color:#fff;
+    font-size:11px;
+    font-weight:600;
+    padding:2px 6px;
+    border-radius:4px;
+    white-space:nowrap;
+  }
+  .rectBox.rectBox-text .rectTag{
+    background:#2f9e57;
+  }
+  .rectBox.rectBox-care .rectTag{
+    background:#7b4fae;
+  }
+  .rectBox .rectDel{
+    position:absolute;
+    top:-22px;
+    right:-2px;
+    background:#e0593e;
+    color:#fff;
+    font-size:11px;
+    font-weight:700;
+    width:22px; height:22px;
+    line-height:22px;
+    text-align:center;
+    border-radius:4px;
+    cursor:pointer;
+    touch-action:manipulation;
+    z-index:5;
+  }
+  .rectBox.rectBox-text .rectDel{
+    background:#2f9e57;
+  }
+  .rectBox.rectBox-care .rectDel{
+    background:#7b4fae;
+  }
+  .panel{
+    background:#fff;
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:16px;
+  }
+  .drop{
+    border:1.5px dashed var(--line);
+    border-radius:10px;
+    padding:24px;
+    text-align:center;
+    cursor:pointer;
+    transition:border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.drag{
+    border-color:var(--accent);
+    background:var(--accent-soft);
+  }
+  .drop input{display:none;}
+  .drop-label{font-size:13.5px; color:#4a4942;}
+  .drop-label b{color:var(--accent);}
+  .status{
+    font-size:12.5px;
+    color:#6b6a64;
+    margin-top:8px;
+    font-family:var(--mono);
+    white-space:pre-wrap;
+  }
+  .status.err{color:var(--warn);}
+  table.fields{
+    width:100%;
+    border-collapse:collapse;
+    font-size:13px;
+  }
+  table.fields td{
+    padding:5px 4px;
+    border-bottom:1px solid #eee;
+    vertical-align:middle;
+  }
+  table.fields td.label{
+    color:#6b6a64;
+    width:110px;
+    font-size:11.5px;
+  }
+  table.fields input{
+    width:100%;
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:5px 7px;
+    font-size:13px;
+    font-family:inherit;
+    text-transform:uppercase;
+  }
+  h2{font-size:13px; margin:0 0 10px; font-weight:600;}
+  .care-note{
+    font-size:11.5px;
+    color:#6b6a64;
+    background:#f4f3ef;
+    border-radius:6px;
+    padding:8px 10px;
+    margin-top:8px;
+  }
+  button{
+    background:var(--accent);
+    color:#fff;
+    border:none;
+    border-radius:7px;
+    padding:10px 16px;
+    font-size:13px;
+    font-weight:600;
+    cursor:pointer;
+    width:100%;
+  }
+  button:disabled{background:#aaa9a3; cursor:not-allowed;}
+  button.secondary{
+    background:#fff;
+    color:var(--accent);
+    border:1px solid var(--accent);
+  }
+  .cropList{
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    max-height:300px;
+    overflow-y:auto;
+  }
+  .cropItem{
+    display:flex;
+    gap:8px;
+    align-items:flex-start;
+    border:1px solid var(--line);
+    border-radius:8px;
+    padding:8px;
+  }
+  .cropItem img{
+    width:54px;
+    height:54px;
+    object-fit:cover;
+    border-radius:5px;
+    background:#eee;
+    flex-shrink:0;
+    margin-top:2px;
+  }
+  .cropItem .ci-info{
+    flex:1;
+    font-size:11px;
+    color:#777;
+  }
+  .cropItem .ci-name{
+    width:100%;
+    border:1px solid var(--line);
+    border-radius:5px;
+    padding:5px 7px;
+    font-size:11.5px;
+    text-transform:uppercase;
+    font-family:inherit;
+  }
+  .cropItem .ci-remove{
+    color:var(--warn);
+    font-size:11px;
+    cursor:pointer;
+    flex-shrink:0;
+    margin-top:2px;
+  }
+  .empty-note{
+    font-size:12.5px;
+    color:#999;
+    text-align:center;
+    padding:14px 0;
+  }
+  .hidden{display:none;}
+  .step{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    width:18px;height:18px;
+    border-radius:50%;
+    background:var(--accent);
+    color:#fff;
+    font-size:10.5px;
+    font-weight:700;
+    margin-right:7px;
+  }
+  .toggleDiag{color:#6b6a64; cursor:pointer; font-size:11.5px;}
+  pre.diagLog{
+    max-height:180px;
+    overflow:auto;
+    background:#f4f3ef;
+    padding:8px;
+    border-radius:6px;
+    font-size:10.5px;
+    margin-top:8px;
+  }
+  /* PWA standalone: respect iPhone notch / home bar */
+  @media (display-mode: standalone){
+    .topbar{
+      padding-top: max(14px, env(safe-area-inset-top));
+      padding-left: max(18px, env(safe-area-inset-left));
+      padding-right: max(18px, env(safe-area-inset-right));
+    }
+    .sideCol{
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>Catálogo por variante</h1>
+  <p class="sub">Selecione com o mouse/dedo cada variante no book. A capa pode ser ignorada — só marque as fotos das cores.</p>
+</div>
+
+<div class="layout">
+  <div class="bookCol" id="bookCol">
+    <div class="panel" style="width:100%; max-width:640px;">
+      <label class="drop" id="dropZone">
+        <input type="file" id="fileInput" accept="application/pdf">
+        <div class="drop-label">Arraste o PDF do book aqui ou <b>clique para escolher</b></div>
+      </label>
+      <div class="status" id="status"></div>
+      <span class="toggleDiag" id="toggleDiag">mostrar diagnóstico técnico ▾</span>
+      <pre id="diagLog" class="diagLog hidden"></pre>
+    </div>
+    <!-- rendered pages get appended here -->
+  </div>
+
+  <div class="sideCol" id="sideCol">
+    <div class="sheetHandle" id="sheetHandle">
+      <span class="grip"></span>
+      <b>Ficha e variantes <span class="sheetCount" id="sheetCount">0</span></b>
+      <span id="sheetToggleIcon" style="font-size:18px; color:#999;">▾</span>
+    </div>
+    <div class="sheetBody">
+      <div class="panel hidden" id="fieldsPanel">
+        <div class="step">1</div><b style="font-size:13px;">Ficha técnica (comum a todas as páginas)</b>
+        <table class="fields" style="margin-top:10px;">
+          <tr><td class="label">Nome do tecido</td><td><input id="f_nome"></td></tr>
+          <tr><td class="label">Referência</td><td><input id="f_ref"></td></tr>
+          <tr><td class="label">Composição</td><td><input id="f_comp"></td></tr>
+          <tr><td class="label">Largura</td><td><input id="f_largura"></td></tr>
+          <tr><td class="label">Gramatura</td><td><input id="f_gram"></td></tr>
+          <tr><td class="label">Processo</td><td><input id="f_processo"></td></tr>
+        </table>
+        <div class="care-note">Esses campos foram lidos automaticamente do texto do PDF — confira e corrija se precisar. O nome do tecido também é lido da capa, se encontrado lá.</div>
+      </div>
+
+      <div class="panel hidden" id="careIconsPanel">
+        <div class="step">·</div><b style="font-size:13px;">Ícones de cuidado/lavagem</b>
+        <div id="careIconsStatus" class="care-note">Procurando automaticamente...</div>
+        <div id="careIconsPreviewWrap" class="hidden" style="margin-top:8px; text-align:center;">
+          <img id="careIconsPreview" style="max-width:100%; max-height:70px; border:1px solid var(--line); border-radius:6px; background:#fff;">
+        </div>
+        <div style="margin-top:10px;">
+          <button id="markCareBtn" class="secondary" style="background:#7b4fae; color:#fff; border-color:#7b4fae;">Marcar manualmente (roxo)</button>
+        </div>
+      </div>
+
+      <div class="panel hidden" id="cropsPanel">
+        <div class="step">2</div><b style="font-size:13px;">Variantes selecionadas</b>
+        <p class="sub" style="margin:8px 0;">Marque primeiro a <b style="color:#e0593e;">foto</b> (vermelho) e depois o <b style="color:#2f9e57;">texto</b> abaixo dela (verde) para cada variante, na ordem do book.</p>
+        <button id="undoBtn" class="secondary" style="margin-bottom:10px;" disabled>↶ Desfazer última seleção</button>
+        <div class="cropList" id="cropList">
+          <div class="empty-note" id="emptyNote">Nenhuma variante selecionada ainda. Desenhe um retângulo vermelho sobre a foto, depois um verde sobre o texto abaixo.</div>
+        </div>
+      </div>
+
+      <div class="panel hidden" id="genPanel">
+        <div class="step">3</div><b style="font-size:13px;">Gerar arquivos</b>
+        <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+          <button id="generateBtn">Gerar PDF (1 página por variante)</button>
+          <button id="generateZipBtn" class="secondary">Baixar imagens separadas (.zip)</button>
+        </div>
+        <div class="care-note">Nome de cada imagem: NOME DO TECIDO_PROCESSO_NOME DA VARIANTE.png</div>
+        <div class="status" id="genStatus"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+document.getElementById('sheetHandle').addEventListener('click', ()=>{
+  const sc = document.getElementById('sideCol');
+  const icon = document.getElementById('sheetToggleIcon');
+  sc.classList.toggle('collapsed');
+  icon.textContent = sc.classList.contains('collapsed') ? '▴' : '▾';
+});
+
+const statusEl = document.getElementById('status');
+const genStatus = document.getElementById('genStatus');
+const bookCol = document.getElementById('bookCol');
+const fieldsPanel = document.getElementById('fieldsPanel');
+const cropsPanel = document.getElementById('cropsPanel');
+const genPanel = document.getElementById('genPanel');
+const cropList = document.getElementById('cropList');
+const emptyNote = document.getElementById('emptyNote');
+const diagLogEl = document.getElementById('diagLog');
+
+const diag = {
+  lines: [],
+  log(msg){ this.lines.push(msg); diagLogEl.textContent = this.lines.join('\n'); },
+  clear(){ this.lines = []; diagLogEl.textContent = ''; }
+};
+document.getElementById('toggleDiag').addEventListener('click', (e)=>{
+  diagLogEl.classList.toggle('hidden');
+  e.target.textContent = diagLogEl.classList.contains('hidden') ? 'mostrar diagnóstico técnico ▾' : 'ocultar diagnóstico técnico ▴';
+});
+
+function setStatus(msg, isErr){
+  statusEl.textContent = msg;
+  statusEl.className = 'status' + (isErr ? ' err' : '');
+}
+
+window.addEventListener('DOMContentLoaded', ()=>{
+  if(typeof pdfjsLib === 'undefined'){
+    setStatus('A biblioteca pdf.js não carregou neste ambiente (bloqueio de rede/sandbox). Tente abrir este arquivo HTML direto no navegador do celular ou computador.', true);
+  } else {
+    diag.log('pdf.js carregado, versão: ' + (pdfjsLib.version || 'desconhecida'));
+  }
+});
+
+let sheet = {};
+let variants = []; // {id, photoDataUrl, textDataUrl, variantName, ocrAttempted, ocrConfident, pageNum}
+let variantCounter = 0;
+let docFullText = '';
+let coverText = ''; // text captured from page 1, kept for diagnostics
+let docCaptionPool = []; // color-name captions extracted from PDF text (e.g. "PVLW/801 DENIM"), consumed in selection order
+let nextMark = 'photo'; // alternates 'photo' -> 'text' -> 'photo' .., global across the whole document
+let careIconDataUrl = null; // single crop reused on every generated page
+let careMarkModeActive = false; // true after the user clicks "Marcar manualmente (roxo)", consumes exactly one selection
+let undoStack = []; // most recent action last; each entry knows how to reverse itself
+
+function updateSheetCount(){
+  document.getElementById('sheetCount').textContent = variants.length;
+}
+
+function pushUndo(action){
+  undoStack.push(action);
+  updateUndoButton();
+}
+
+function updateUndoButton(){
+  const btn = document.getElementById('undoBtn');
+  btn.disabled = undoStack.length === 0;
+}
+
+function undoLast(){
+  const action = undoStack.pop();
+  updateUndoButton();
+  if(!action) return;
+  action.undo();
+  renderCropList();
+}
+
+document.getElementById('undoBtn').addEventListener('click', undoLast);
+
+
+// ---------- OCR (Tesseract.js) on the green "text" crop ----------
+let tesseractWorkerPromise = null;
+function getTesseractWorker(){
+  if(!tesseractWorkerPromise){
+    if(typeof Tesseract === 'undefined'){
+      diag.log('Tesseract.js não carregou neste ambiente — OCR automático ficará indisponível, preencha manualmente.');
+      return Promise.resolve(null);
+    }
+    // 'eng' loads faster than 'por' and handles color names like "Camel",
+    // "Marinho", "Denim", "Grafite" well enough for our purposes.
+    tesseractWorkerPromise = Tesseract.createWorker('eng').catch(e=>{
+      diag.log('Falha ao iniciar o OCR: ' + e.message);
+      return null;
+    });
+  }
+  return tesseractWorkerPromise;
+}
+
+async function runOcrOnVariant(variant, textDataUrl){
+  variant.ocrAttempted = true;
+  renderCropList();
+  try{
+    const worker = await getTesseractWorker();
+    if(!worker){
+      diag.log(`OCR indisponível para variante ${variant.id} — preencha manualmente.`);
+      variant.ocrConfident = false;
+      renderCropList();
+      return;
+    }
+    const result = await worker.recognize(textDataUrl);
+    const raw = (result?.data?.text || '').trim();
+    const confidence = result?.data?.confidence || 0;
+    diag.log(`OCR variante ${variant.id}: "${raw}" (confiança ${confidence.toFixed(0)}%)`);
+
+    const cleaned = raw.replace(/\s+/g, ' ').trim();
+    if(cleaned.length >= 2){
+      // Always fill the field with whatever was read — even at low confidence
+      // it's usually better than nothing, and the user can edit it directly.
+      // Mark as confident only if the engine is reasonably sure, so the UI
+      // can show a visual distinction, but don't suppress low-confidence results.
+      variant.variantName = cleaned.toUpperCase();
+      variant.ocrConfident = confidence >= 45;
+    } else {
+      variant.ocrConfident = false;
+    }
+  }catch(e){
+    diag.log(`OCR falhou na variante ${variant.id}: ${e.message}`);
+    variant.ocrConfident = false;
+  }
+  renderCropList();
+}
+
+// ---------- Drag & drop wiring ----------
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+dropZone.addEventListener('dragover', e=>{e.preventDefault(); dropZone.classList.add('drag');});
+dropZone.addEventListener('dragleave', ()=>dropZone.classList.remove('drag'));
+dropZone.addEventListener('drop', e=>{
+  e.preventDefault();
+  dropZone.classList.remove('drag');
+  if(e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e=>{
+  if(e.target.files.length) handleFile(e.target.files[0]);
+});
+
+async function handleFile(file){
+  if(file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')){
+    setStatus('Isso não parece ser um PDF.', true);
+    return;
+  }
+  if(typeof pdfjsLib === 'undefined'){
+    setStatus('pdf.js não está disponível neste ambiente.', true);
+    return;
+  }
+  diag.clear();
+  variants = [];
+  variantCounter = 0;
+  nextMark = 'photo';
+  undoStack = [];
+  docCaptionPool = [];
+  updateUndoButton();
+  renderCropList();
+  updateSheetCount();
+  // remove any previously rendered pages (keep the upload panel, which is bookCol's first child)
+  Array.from(bookCol.children).slice(1).forEach(el=>el.remove());
+
+  setStatus('Lendo PDF...');
+  try{
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({data: buf}).promise;
+    diag.log(`PDF aberto: ${pdf.numPages} página(s)`);
+    setStatus(`Renderizando ${pdf.numPages} página(s)...`);
+
+    let fullText = '';
+    let textWithoutCover = '';
+    for(let p=1; p<=pdf.numPages; p++){
+      const page = await pdf.getPage(p);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items.map(it=>it.str).join(' ');
+      fullText += '\n' + pageText;
+      if(p === 1) coverText = pageText; // kept for diagnostics, no longer used for name extraction
+      else textWithoutCover += '\n' + pageText;
+      await renderPageWithOverlay(page, p, pdf.numPages);
+    }
+
+    extractFields(fullText, textWithoutCover);
+    docFullText = fullText;
+    // Extract color-name captions (e.g. "PVLW/801 DENIM") from the full
+    // text as a fast pre-fill for variant names, before OCR runs.
+    const norm = fullText.replace(/\s+/g,' ');
+    const captionRe = /([A-Z0-9]{2,10}\/[0-9]{2,4}\s+[A-Za-zÀ-ú]+)/g;
+    docCaptionPool = [...norm.matchAll(captionRe)].map(m=>m[1].toUpperCase());
+    diag.log(`legendas encontradas no texto: ${docCaptionPool.length} (${docCaptionPool.join(' | ')})`);
+    renderFieldsPanel();
+    fieldsPanel.classList.remove('hidden');
+    document.getElementById('careIconsPanel').classList.remove('hidden');
+    cropsPanel.classList.remove('hidden');
+    genPanel.classList.remove('hidden');
+
+    careIconDataUrl = null;
+    careMarkModeActive = false;
+    await detectCareIconsAutomatically();
+
+    setStatus(`Pronto. Confira a ficha técnica acima e marque cada variante no book: primeiro a foto (vermelho), depois o texto abaixo dela (verde). A página 1 costuma ser a capa — pode pular.`);
+  }catch(err){
+    console.error(err);
+    diag.log('Erro: ' + err.message);
+    setStatus('Erro ao processar o PDF: ' + err.message, true);
+  }
+}
+
+// ---------- Render one page as a canvas + draggable-selection overlay ----------
+async function renderPageWithOverlay(page, pageNum, totalPages){
+  // Higher render scale = sharper crops, since every crop is a direct
+  // pixel copy from this base canvas. 2.5 is a reasonable ceiling before
+  // memory/perf on a phone become a concern for a multi-page book.
+  const viewport = page.getViewport({scale: 2.5});
+
+  const wrap = document.createElement('div');
+  wrap.className = 'pageWrap';
+  wrap.style.width = viewport.width + 'px';
+
+  const labelRow = document.createElement('div');
+  labelRow.className = 'pageLabel';
+  labelRow.style.padding = '4px 0';
+  labelRow.textContent = `Página ${pageNum} de ${totalPages}`;
+  if(pageNum === 1){
+    const flag = document.createElement('span');
+    flag.className = 'cover-flag';
+    flag.textContent = 'provável capa — nome do tecido já foi lido daqui';
+    labelRow.appendChild(flag);
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.className = 'basePage';
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext('2d');
+
+  try{
+    await page.render({canvasContext: ctx, viewport}).promise;
+    diag.log(`página ${pageNum}: renderizada (${canvas.width}x${canvas.height})`);
+  }catch(e){
+    diag.log(`página ${pageNum}: falha ao renderizar — ${e.message}`);
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'selOverlay';
+
+  wrap.appendChild(canvas);
+  wrap.appendChild(overlay);
+  bookCol.appendChild(labelRow);
+  bookCol.appendChild(wrap);
+
+  wireSelection(wrap, overlay, canvas, pageNum);
+}
+
+// ---------- Pointer-drag rectangle selection over a rendered page ----------
+// Selections alternate globally (across the whole document) between two
+// kinds: 'photo' (red) then 'text' (green). A photo+text pair becomes one
+// variant. The pairing is purely sequential/global, matching how the user
+// works through the book top to bottom.
+//
+// Gesture disambiguation: a touch can mean either "scroll the page" or
+// "draw a selection rectangle". We don't decide immediately on touchstart —
+// instead we wait for the first few pixels of movement and look at the
+// direction. A mostly-vertical drag is treated as scrolling (we back off
+// and let the browser handle it natively); any other drag is treated as
+// drawing. Until that decision is made we don't call preventDefault(),
+// so native scrolling stays available the whole time the gesture is
+// ambiguous.
+function wireSelection(wrap, overlay, canvas, pageNum){
+  let startX=0, startY=0;
+  let state = 'idle'; // 'idle' -> 'pending' (touched, gesture not yet classified) -> 'drawing' | 'scrolling'
+  let liveBox=null;
+  const DECISION_THRESHOLD = 10; // px of movement before we commit to scroll vs draw
+
+  function pointFromEvent(e){
+    const rect = overlay.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    return {
+      x: clientX - rect.left,
+      y: clientY - rect.top,
+      scaleX: canvas.width / rect.width,
+      scaleY: canvas.height / rect.height
+    };
+  }
+
+  function startDrawing(p){
+    state = 'drawing';
+    liveBox = document.createElement('div');
+    liveBox.className = 'rectBox' + (careMarkModeActive ? ' rectBox-care' : (nextMark === 'text' ? ' rectBox-text' : ''));
+    liveBox.style.left = p.x+'px';
+    liveBox.style.top = p.y+'px';
+    overlay.appendChild(liveBox);
+  }
+
+  function onDown(e){
+    if(e.target.closest && e.target.closest('.rectDel, .rectTag')) return;
+    // For mouse (desktop) there's no scroll ambiguity, so start drawing
+    // immediately. For touch we wait — see onMove.
+    const p = pointFromEvent(e);
+    startX = p.x; startY = p.y;
+    if(e.type === 'mousedown'){
+      e.preventDefault();
+      startDrawing(p);
+    } else {
+      state = 'pending';
+      // Intentionally no preventDefault() yet — keeps native scrolling
+      // available while we wait to see which direction the touch moves.
+    }
+  }
+
+  function onMove(e){
+    if(state === 'idle' || state === 'scrolling') return;
+    const p = pointFromEvent(e);
+
+    if(state === 'pending'){
+      const dx = Math.abs(p.x - startX), dy = Math.abs(p.y - startY);
+      if(dx < DECISION_THRESHOLD && dy < DECISION_THRESHOLD) return; // not enough movement yet to decide
+
+      if(dy > dx * 1.2){
+        // predominantly vertical -> this is a scroll gesture, not a
+        // selection drag. Back off entirely and let the browser scroll.
+        state = 'scrolling';
+        return;
+      }
+      // Otherwise treat it as the start of drawing a rectangle.
+      e.preventDefault();
+      startDrawing({x:startX, y:startY});
+    }
+
+    if(state !== 'drawing') return;
+    e.preventDefault();
+    const x = Math.min(p.x, startX);
+    const y = Math.min(p.y, startY);
+    const w = Math.abs(p.x - startX);
+    const h = Math.abs(p.y - startY);
+    liveBox.style.left = x+'px';
+    liveBox.style.top = y+'px';
+    liveBox.style.width = w+'px';
+    liveBox.style.height = h+'px';
+  }
+  async function onUp(e){
+    const wasDrawing = (state === 'drawing');
+    state = 'idle';
+    if(!wasDrawing) return;
+    const p = pointFromEvent(e.changedTouches ? {touches:e.changedTouches} : e);
+    const x0 = Math.min(p.x, startX), y0 = Math.min(p.y, startY);
+    const wPx = Math.abs(p.x - startX), hPx = Math.abs(p.y - startY);
+
+    if(wPx < 12 || hPx < 12){
+      // too small to be intentional — discard
+      liveBox.remove();
+      liveBox = null;
+      return;
+    }
+
+    const rect = overlay.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+
+    const cropCanvas = document.createElement('canvas');
+    cropCanvas.width = wPx*scaleX;
+    cropCanvas.height = hPx*scaleY;
+    const cctx = cropCanvas.getContext('2d');
+    cctx.imageSmoothingEnabled = true;
+    cctx.imageSmoothingQuality = 'high';
+    cctx.drawImage(canvas, x0*scaleX, y0*scaleY, wPx*scaleX, hPx*scaleY, 0, 0, cropCanvas.width, cropCanvas.height);
+    const dataUrl = cropCanvas.toDataURL('image/png');
+
+    if(careMarkModeActive){
+      // One-shot: this single selection becomes the reusable care-icon crop,
+      // then we return to the normal photo/text cycle without consuming a
+      // step of it.
+      careMarkModeActive = false;
+      const previousCareIconDataUrl = careIconDataUrl; // for undo
+      careIconDataUrl = dataUrl;
+      showCareIconsPreview('Ícones de cuidado marcados manualmente.');
+
+      const tag = document.createElement('div');
+      tag.className = 'rectTag';
+      tag.textContent = 'cuidado';
+      liveBox.appendChild(tag);
+      const del = document.createElement('div');
+      del.className = 'rectDel';
+      del.textContent = '×';
+      liveBox.appendChild(del);
+
+      const thisBox = liveBox;
+      const removeThisCareSelection = ()=>{
+        careIconDataUrl = previousCareIconDataUrl;
+        showCareIconsPreview(previousCareIconDataUrl ? 'Restaurado.' : 'Removido. Marque novamente ou deixe sem ícones de cuidado.');
+        thisBox.remove();
+      };
+
+      let handled = false;
+      const removeHandler = (ev)=>{
+        ev.preventDefault(); ev.stopPropagation();
+        if(handled) return;
+        handled = true;
+        removeThisCareSelection();
+      };
+      del.addEventListener('touchend', removeHandler, {passive:false});
+      del.addEventListener('click', removeHandler);
+
+      pushUndo({ undo: ()=>{ if(!handled){ handled = true; removeThisCareSelection(); } } });
+
+      liveBox = null;
+      return;
+    }
+
+    const kind = nextMark; // 'photo' or 'text', captured before we flip it
+    nextMark = (kind === 'photo') ? 'text' : 'photo';
+
+    const tag = document.createElement('div');
+    tag.className = 'rectTag';
+    liveBox.appendChild(tag);
+
+    const del = document.createElement('div');
+    del.className = 'rectDel';
+    del.textContent = '×';
+    liveBox.appendChild(del);
+
+    // Wire the delete control to fire on both real clicks (desktop/mouse)
+    // and touchend (mobile) directly — we don't rely on the browser's
+    // synthetic "click" event after a tap, since touch-action:none on the
+    // drawing overlay above can suppress or delay it. stopPropagation also
+    // prevents the tap from being picked up as the start of a new drag.
+    function wireDelete(el, handler){
+      let handled = false;
+      const run = (ev)=>{
+        ev.preventDefault();
+        ev.stopPropagation();
+        if(handled) return; // avoid double-firing from both touchend and click
+        handled = true;
+        handler();
+      };
+      el.addEventListener('touchend', run, {passive:false});
+      el.addEventListener('click', run);
+    }
+
+    if(kind === 'photo'){
+      variantCounter++;
+      const id = 'variant_'+variantCounter;
+      variants.push({id, photoDataUrl: dataUrl, textDataUrl: null, variantName: '', ocrAttempted:false, pageNum});
+      tag.textContent = '#'+variantCounter+' foto';
+
+      const thisBox = liveBox;
+      let removed = false;
+      const removeThisVariant = ()=>{
+        if(removed) return;
+        removed = true;
+        variants = variants.filter(v=>v.id !== id);
+        thisBox.remove();
+        nextMark = 'photo'; // undoing the photo also resets the cycle back to expecting a photo
+        renderCropList();
+        updateSheetCount();
+      };
+      wireDelete(del, removeThisVariant);
+      pushUndo({ undo: removeThisVariant });
+
+      renderCropList();
+      updateSheetCount();
+    } else {
+      // pairs with the most recently created variant that doesn't have its
+      // text crop yet (normally the very last one in the array)
+      const target = [...variants].reverse().find(v => !v.textDataUrl);
+      let createdStandalone = false;
+      let standaloneId = null;
+      if(!target){
+        // no pending photo to pair with — treat this as a standalone text
+        // crop so nothing is silently lost, user can still reassign by
+        // deleting/redoing
+        variantCounter++;
+        standaloneId = 'variant_'+variantCounter;
+        createdStandalone = true;
+        variants.push({id: standaloneId, photoDataUrl: dataUrl, textDataUrl: null, variantName: '', ocrAttempted:false, pageNum, orphanText:true});
+        tag.textContent = '#'+variantCounter+' (sem foto!)';
+      } else {
+        target.textDataUrl = dataUrl;
+        tag.textContent = '#'+target.id.replace('variant_','')+' texto';
+      }
+      renderCropList();
+
+      const thisBox = liveBox;
+      let removed = false;
+      const removeThisTextSelection = ()=>{
+        if(removed) return;
+        removed = true;
+        if(createdStandalone){
+          variants = variants.filter(v=>v.id !== standaloneId);
+        } else if(target){
+          target.textDataUrl = null;
+          target.variantName = '';
+          target.ocrAttempted = false;
+          target.ocrConfident = undefined;
+        }
+        thisBox.remove();
+        nextMark = 'text'; // undoing the text also resets the cycle back to expecting a text mark
+        renderCropList();
+      };
+      wireDelete(del, removeThisTextSelection);
+      pushUndo({ undo: removeThisTextSelection });
+
+      if(target){
+        // Pre-fill the variant name immediately from the PDF text pool —
+        // this is fast and reliable, unlike OCR which can be slow or fail
+        // in restricted environments. OCR may overwrite this later if it
+        // reads something better from the actual captured text crop.
+        if(!target.variantName && docCaptionPool.length > 0){
+          const suggestion = docCaptionPool.shift(); // consume in order
+          if(suggestion){
+            target.variantName = suggestion;
+            renderCropList();
+          }
+        }
+        // attempt OCR on the freshly captured text crop
+        runOcrOnVariant(target, dataUrl);
+      }
+    }
+
+    liveBox = null;
+  }
+
+  overlay.addEventListener('mousedown', onDown);
+  overlay.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+  overlay.addEventListener('touchstart', onDown, {passive:false});
+  overlay.addEventListener('touchmove', onMove, {passive:false});
+  overlay.addEventListener('touchend', onUp);
+}
+
+// ---------- Crop list (sidebar) ----------
+function renderCropList(){
+  const items = cropList.querySelectorAll('.cropItem');
+  items.forEach(i=>i.remove());
+  emptyNote.classList.toggle('hidden', variants.length>0);
+
+  variants.forEach((v)=>{
+    const item = document.createElement('div');
+    item.className = 'cropItem';
+
+    let ocrNote = '';
+    if(v.orphanText){
+      ocrNote = '<span style="color:#8a4b2e;">⚠ texto sem foto correspondente</span>';
+    } else if(!v.textDataUrl){
+      ocrNote = '<span style="color:#999;">aguardando marcação do texto (verde)</span>';
+    } else if(!v.ocrAttempted){
+      ocrNote = '<span style="color:#999;">—</span>';
+    } else if(v.ocrConfident === undefined){
+      ocrNote = '<span style="color:#999;">lendo texto (OCR)…</span>';
+    } else if(v.ocrConfident){
+      ocrNote = '<span style="color:#2f9e57;">✓ lido automaticamente — confira</span>';
+    } else {
+      ocrNote = '<span style="color:#8a4b2e;">não consegui ler — digite manualmente</span>';
+    }
+
+    item.innerHTML = `
+      <img src="${v.photoDataUrl}">
+      <div class="ci-info">
+        <div style="margin-bottom:3px;">Variante ${v.id.replace('variant_','#')} · pág. ${v.pageNum}<br>${ocrNote}</div>
+        <input type="text" class="ci-name" data-id="${v.id}" placeholder="NOME DA VARIANTE (ex: G3753/209 CAMEL)" value="${(v.variantName||'').replace(/"/g,'&quot;')}">
+      </div>
+      <div class="ci-remove" data-id="${v.id}">remover</div>
+    `;
+    cropList.appendChild(item);
+  });
+
+  cropList.querySelectorAll('.ci-name').forEach(inp=>{
+    inp.addEventListener('input', e=>{
+      const id = e.target.dataset.id;
+      const upper = e.target.value.toUpperCase();
+      if(e.target.value !== upper){
+        const pos = e.target.selectionStart;
+        e.target.value = upper;
+        e.target.setSelectionRange(pos, pos);
+      }
+      const v = variants.find(x=>x.id===id);
+      if(v) v.variantName = upper;
+    });
+  });
+  cropList.querySelectorAll('.ci-remove').forEach(btn=>{
+    btn.addEventListener('click', e=>{
+      const id = e.target.dataset.id;
+      variants = variants.filter(v => v.id !== id);
+      // also remove the corresponding rectBox overlays (photo and/or text) if still present
+      document.querySelectorAll('.rectBox').forEach(box=>{
+        const tag = box.querySelector('.rectTag');
+        if(tag && tag.textContent.includes(id.replace('variant_','#'))) box.remove();
+      });
+      renderCropList();
+      updateSheetCount();
+    });
+  });
+  updateSheetCount();
+}
+
+// Simplified approach: the product name is almost always the very first
+// line of text that appears once we skip the cover page (page 1), since
+// the cover is often a pure image/photo with no extractable text at all
+// (as seen in books where the title is baked into the cover artwork), while
+// the technical-sheet page that follows reliably opens with the fabric
+// name as its first line.
+function extractNameFromFirstLine(textWithoutCover){
+  const trimmed = (textWithoutCover || '').trim();
+  if(!trimmed) return '';
+  // pdf.js text items are joined with spaces per page and pages are joined
+  // with newlines, so the "first line" here is the first page's text up to
+  // the first stretch that looks like the start of a labeled field
+  // (Referência, Comp, Largura, etc.) or a newline — whichever comes first.
+  const firstPageText = trimmed.split('\n')[0].trim();
+  const cutMatch = firstPageText.match(/\b(Refer[êe]ncia|Comp(?:osi[çc][ãa]o)?|Largura|Larg|Gramatura|Gr|Processo)\s*:/i);
+  const head = (cutMatch ? firstPageText.slice(0, cutMatch.index) : firstPageText).trim();
+  if(head.length === 0 || head.length > 60) return '';
+  return head;
+}
+
+// ---------- Automatic wash-care icon row detection ----------
+// Heuristic: scan each rendered page canvas for small connected blobs of
+// dark pixels (icon strokes), then cluster nearby blobs and look for a
+// cluster shaped like a short, wide row with low vertical scatter (icons
+// sitting in a line) — as opposed to a tall stacked logo or other shapes.
+// This is approximate and will sometimes pick the wrong region (e.g. a
+// short text caption can look similar); the "Marcar manualmente" button is
+// the reliable fallback/override for whenever this guesses wrong.
+function findIconRowOnCanvas(canvas){
+  const w = canvas.width, h = canvas.height;
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.getImageData(0, 0, w, h).data;
+
+  // Downscale factor for the scan to keep this fast on a phone — we don't
+  // need full resolution to find blob shapes, just their approximate
+  // bounding boxes.
+  const step = Math.max(1, Math.round(Math.min(w,h) / 900));
+  const ink = []; // flat boolean grid at the downsampled resolution
+  const gw = Math.ceil(w/step), gh = Math.ceil(h/step);
+  for(let gy=0; gy<gh; gy++){
+    for(let gx=0; gx<gw; gx++){
+      const x = gx*step, y = gy*step;
+      const idx = (y*w + x) * 4;
+      const r = imgData[idx], g = imgData[idx+1], b = imgData[idx+2];
+      const lum = 0.299*r + 0.587*g + 0.114*b;
+      ink.push(lum < 200);
+    }
+  }
+
+  // Connected components on the downsampled grid (4-connectivity, iterative
+  // flood fill to avoid recursion limits)
+  const visited = new Uint8Array(gw*gh);
+  const components = [];
+  for(let gy=0; gy<gh; gy++){
+    for(let gx=0; gx<gw; gx++){
+      const i = gy*gw+gx;
+      if(!ink[i] || visited[i]) continue;
+      // flood fill
+      const stack = [i];
+      visited[i] = 1;
+      let minX=gx,maxX=gx,minY=gy,maxY=gy,count=0;
+      while(stack.length){
+        const cur = stack.pop();
+        const cy = Math.floor(cur/gw), cx = cur%gw;
+        count++;
+        if(cx<minX)minX=cx; if(cx>maxX)maxX=cx;
+        if(cy<minY)minY=cy; if(cy>maxY)maxY=cy;
+        const neighbors = [cur-1,cur+1,cur-gw,cur+gw];
+        for(const n of neighbors){
+          if(n<0 || n>=gw*gh) continue;
+          if(Math.floor(n/gw) !== cy && Math.abs(n-cur)===1) continue; // avoid wrap on row edges
+          if(!visited[n] && ink[n]){ visited[n]=1; stack.push(n); }
+        }
+      }
+      components.push({minX,maxX,minY,maxY, w:(maxX-minX+1), h:(maxY-minY+1), count});
+    }
+  }
+
+  // Convert back to canvas pixel scale and filter to icon-stroke-plausible sizes
+  const scaled = components.map(c=>({
+    x0:c.minX*step, y0:c.minY*step, x1:(c.maxX+1)*step, y1:(c.maxY+1)*step,
+    w:c.w*step, h:c.h*step
+  })).filter(c => c.w>4 && c.w<w*0.4 && c.h>4 && c.h<h*0.15);
+
+  if(scaled.length < 4) return null;
+
+  // Cluster by proximity (union-find over bounding boxes with a small gap)
+  const gap = Math.max(4, step*3);
+  const n = scaled.length;
+  const parent = Array.from({length:n}, (_,i)=>i);
+  function find(i){ while(parent[i]!==i) i=parent[i]; return i; }
+  function union(i,j){ const pi=find(i), pj=find(j); if(pi!==pj) parent[pi]=pj; }
+  function close(a,b){
+    return !(a.x1+gap < b.x0 || b.x1+gap < a.x0 || a.y1+gap < b.y0 || b.y1+gap < a.y0);
+  }
+  for(let i=0;i<n;i++) for(let j=i+1;j<n;j++) if(close(scaled[i],scaled[j])) union(i,j);
+
+  const groups = {};
+  for(let i=0;i<n;i++){ const r=find(i); (groups[r] = groups[r]||[]).push(scaled[i]); }
+
+  const candidates_out = [];
+  Object.values(groups).forEach(members=>{
+    if(members.length < 4) return;
+    const x0=Math.min(...members.map(m=>m.x0)), y0=Math.min(...members.map(m=>m.y0));
+    const x1=Math.max(...members.map(m=>m.x1)), y1=Math.max(...members.map(m=>m.y1));
+    const cw=x1-x0, ch=y1-y0;
+    if(ch > h*0.07) return;             // a single icon row is short vertically
+    if(cw < w*0.07 || cw > w*0.7) return; // must span a plausible row width
+
+    const centersY = members.map(m=>(m.y0+m.y1)/2);
+    const meanCy = centersY.reduce((a,b)=>a+b,0)/centersY.length;
+    const stdCy = Math.sqrt(centersY.reduce((a,c)=>a+(c-meanCy)**2,0)/centersY.length);
+    const rowLikeness = stdCy / Math.max(ch,1);
+    if(rowLikeness > 0.30) return;       // vertically scattered -> not a single row
+
+    const totalMemberW = members.reduce((a,m)=>a+m.w,0);
+    const density = totalMemberW / cw;
+    if(density < 0.15 || density > 1.3) return;
+
+    const score = members.length / Math.max(rowLikeness, 0.02);
+    candidates_out.push({score, x0,y0,x1,y1});
+  });
+
+  candidates_out.sort((a,b)=>b.score-a.score);
+  return candidates_out;
+}
+
+async function detectCareIconsAutomatically(){
+  document.getElementById('careIconsStatus').textContent = 'Procurando automaticamente...';
+  const pageCanvases = bookCol.querySelectorAll('canvas.basePage');
+  const margin = 6;
+
+  for(const canvas of pageCanvases){
+    let candidates = [];
+    try{
+      candidates = findIconRowOnCanvas(canvas);
+    }catch(e){
+      diag.log('Detecção automática de ícones falhou nessa página: ' + e.message);
+      continue;
+    }
+
+    // Test each candidate region (best score first) and reject any where
+    // OCR finds real legible text — a wash-care icon row shouldn't read as
+    // words, so this filters out captions/labels that happen to match the
+    // same "small aligned marks in a row" geometric pattern.
+    for(const cand of candidates.slice(0, 4)){
+      const x0 = Math.max(0, cand.x0-margin), y0 = Math.max(0, cand.y0-margin);
+      const x1 = Math.min(canvas.width, cand.x1+margin), y1 = Math.min(canvas.height, cand.y1+margin);
+      const cropCanvas = document.createElement('canvas');
+      cropCanvas.width = x1-x0;
+      cropCanvas.height = y1-y0;
+      cropCanvas.getContext('2d').drawImage(canvas, x0, y0, x1-x0, y1-y0, 0, 0, x1-x0, y1-y0);
+      const candidateDataUrl = cropCanvas.toDataURL('image/png');
+
+      const looksLikeText = await regionLooksLikeText(candidateDataUrl);
+      if(looksLikeText){
+        diag.log(`candidato de ícones rejeitado (parece texto/legenda): score=${cand.score.toFixed(1)}`);
+        continue;
+      }
+
+      careIconDataUrl = candidateDataUrl;
+      diag.log(`ícones de cuidado: região candidata aceita (${Math.round(x1-x0)}x${Math.round(y1-y0)}, score=${cand.score.toFixed(1)})`);
+      showCareIconsPreview('Encontrado automaticamente — confira se é a faixa de ícones de lavagem certa. Se não for, marque manualmente.');
+      return;
+    }
+  }
+
+  careIconDataUrl = null;
+  document.getElementById('careIconsStatus').textContent = 'Não consegui identificar automaticamente — marque manualmente (botão roxo).';
+  document.getElementById('careIconsPreviewWrap').classList.add('hidden');
+}
+
+// Uses OCR as a negative test: if Tesseract can read a real word out of the
+// region with reasonable confidence, this is very likely a text caption,
+// not a wash-care icon row (icons don't produce legible words).
+async function regionLooksLikeText(dataUrl){
+  try{
+    const worker = await getTesseractWorker();
+    if(!worker) return false; // can't test, don't block on it
+    const result = await worker.recognize(dataUrl);
+    const text = (result?.data?.text || '').replace(/\s+/g,' ').trim();
+    const confidence = result?.data?.confidence || 0;
+    // require at least one real word-like token (2+ letters) for this to count
+    const hasWordToken = /[A-Za-zÀ-ú]{2,}/.test(text);
+    return hasWordToken && confidence >= 50;
+  }catch(e){
+    return false; // OCR failure isn't evidence either way
+  }
+}
+
+function showCareIconsPreview(statusMsg){
+  document.getElementById('careIconsStatus').textContent = statusMsg;
+  const previewWrap = document.getElementById('careIconsPreviewWrap');
+  const previewImg = document.getElementById('careIconsPreview');
+  if(careIconDataUrl){
+    previewImg.src = careIconDataUrl;
+    previewWrap.classList.remove('hidden');
+  } else {
+    previewWrap.classList.add('hidden');
+  }
+}
+
+document.getElementById('markCareBtn').addEventListener('click', ()=>{
+  careMarkModeActive = true;
+  document.getElementById('careIconsStatus').textContent = 'Modo roxo ativo: desenhe um retângulo sobre os ícones de lavagem em qualquer página do book.';
+});
+
+// ---------- Field extraction (regex over concatenated page text) ----------
+function extractFields(text, textWithoutCover){
+  const norm = text.replace(/\s+/g,' ');
+  const grab = (re) => {
+    const m = norm.match(re);
+    return m ? m[1].trim() : '';
+  };
+  let nome = extractNameFromFirstLine(textWithoutCover);
+  if(nome) diag.log(`nome do tecido capturado (primeira linha, sem a capa): "${nome}"`);
+  if(!nome){
+    nome = grab(/(Sarja [A-Za-zÀ-ú]+|Pv [A-Za-zÀ-ú]+|[A-Z][a-zà-ú]+ [A-Z][a-zà-ú]+)(?=\s+Referência)/) || grab(/^([^\n]{3,40})(?=\s*Referência)/);
+  }
+  sheet = {
+    nome,
+    ref: grab(/Refer[êe]ncia\s*:?\s*([A-Za-z0-9\-\/]+)/i),
+    comp: grab(/Comp(?:osi[çc][ãa]o)?\s*:?\s*([0-9]{1,3}\s*%[^,]*(?:,\s*[0-9]{1,3}\s*%[^,\.]*)*)/i),
+    largura: grab(/Larg(?:ura)?\s*:?\s*([0-9.,]+\s*m[tT]?\.?)/i),
+    gram: grab(/Gr(?:amatura)?\s*:?\s*([0-9.,]+\s*g\/m[²2]?\s*-?\s*[0-9.,]*\s*g\/m(?:l| linear)?)/i),
+    processo: grab(/Processo\s*:?\s*([A-Za-z0-9\-]+)/i)
+  };
+}
+
+function renderFieldsPanel(){
+  document.getElementById('f_nome').value = (sheet.nome || '').toUpperCase();
+  document.getElementById('f_ref').value = (sheet.ref || '').toUpperCase();
+  document.getElementById('f_comp').value = (sheet.comp || '').toUpperCase();
+  document.getElementById('f_largura').value = (sheet.largura || '').toUpperCase();
+  document.getElementById('f_gram').value = (sheet.gram || '').toUpperCase();
+  document.getElementById('f_processo').value = (sheet.processo || '').toUpperCase();
+}
+
+// Keep all technical-sheet fields forced to uppercase as the user types,
+// matching the requirement that every manually entered/edited value in
+// this tool stays in caps.
+['f_nome','f_ref','f_comp','f_largura','f_gram','f_processo'].forEach(id=>{
+  document.getElementById(id).addEventListener('input', e=>{
+    const upper = e.target.value.toUpperCase();
+    if(e.target.value !== upper){
+      const pos = e.target.selectionStart;
+      e.target.value = upper;
+      e.target.setSelectionRange(pos, pos);
+    }
+  });
+});
+
+function currentSheet(){
+  return {
+    nome: document.getElementById('f_nome').value,
+    ref: document.getElementById('f_ref').value,
+    comp: document.getElementById('f_comp').value,
+    largura: document.getElementById('f_largura').value,
+    gram: document.getElementById('f_gram').value,
+    processo: document.getElementById('f_processo').value
+  };
+}
+
+// Builds a safe filename from the technical sheet + per-variant name.
+// Strips characters that are invalid (or risky) in filenames across
+// Windows/macOS/Android/iOS — notably "/" which shows up naturally in
+// references like "G3753/209" — and collapses repeated separators so the
+// result stays readable.
+function sanitizeForFilename(str){
+  return (str || '')
+    .toUpperCase()
+    .replace(/[\\/:*?"<>|]/g, '-')   // invalid filename characters -> dash
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/-+/g, '-');
+}
+
+function buildFilenameForVariant(v, s){
+  const parts = [s.nome, s.processo, v.variantName]
+    .map(sanitizeForFilename)
+    .filter(p => p.length > 0);
+  const base = parts.join('_') || ('VARIANTE_' + v.id.toUpperCase());
+  return base + '.png';
+}
+
+function buildZipFilename(s){
+  const parts = [s.nome, s.processo, 'APP CATALOGO']
+    .map(sanitizeForFilename)
+    .filter(p => p.length > 0);
+  const base = parts.join('_') || 'VARIANTES_APP CATALOGO';
+  return base + '.zip';
+}
+
+// Composes the final per-variant image: the photo crop on top, with the
+// variant name re-drawn as sharp, crisp canvas text underneath — instead
+// of reusing the original pixelated/stretched legend crop. This is the
+// single source used by both the ZIP-of-images export and (rasterized
+// into the PDF) the PDF export, so the two outputs always match.
+async function composeVariantImage(v){
+  const photo = await loadImageEl(v.photoDataUrl);
+  const padding = 24;
+  const captionH = v.variantName ? 56 : 0;
+
+  let careImg = null, careH = 0;
+  if(careIconDataUrl){
+    careImg = await loadImageEl(careIconDataUrl);
+    const careTargetW = Math.min(photo.width * 0.4, careImg.width);
+    careH = careTargetW * (careImg.height / careImg.width) + 16; // +16 vertical padding
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = photo.width;
+  canvas.height = careH + photo.height + captionH;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  if(careImg){
+    const careW = Math.min(photo.width * 0.4, careImg.width);
+    const careDrawH = careW * (careImg.height / careImg.width);
+    ctx.drawImage(careImg, canvas.width - careW - 12, 8, careW, careDrawH);
+  }
+
+  ctx.drawImage(photo, 0, careH, photo.width, photo.height);
+
+  if(v.variantName){
+    ctx.fillStyle = '#1c1d1f';
+    const fontSize = Math.max(20, Math.round(photo.width * 0.032));
+    ctx.font = `600 ${fontSize}px -apple-system, Helvetica, Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(v.variantName, canvas.width/2, careH + photo.height + captionH/2, canvas.width - padding*2);
+  }
+
+  return canvas.toDataURL('image/png');
+}
+
+function showDownloadLink(blobUrl, filename, label, statusMsg){
+  genStatus.innerHTML = statusMsg + ' ';
+  const btn = document.createElement('a');
+  btn.href = blobUrl;
+  btn.download = filename;
+  btn.target = '_blank';
+  btn.textContent = '⬇ ' + filename;
+  btn.style.cssText = 'display:block; margin-top:10px; padding:12px 16px; background:#2c4a3e; color:#fff; border-radius:8px; font-weight:700; font-size:14px; text-decoration:none; text-align:center;';
+  genStatus.appendChild(btn);
+}
+
+function loadImageEl(src){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    img.onload = ()=>resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+document.getElementById('generateZipBtn').addEventListener('click', async ()=>{
+  if(variants.length === 0){
+    genStatus.textContent = 'Nenhuma variante selecionada ainda — marque ao menos uma foto no book.';
+    return;
+  }
+  if(typeof JSZip === 'undefined'){
+    genStatus.textContent = 'A biblioteca de compactação (JSZip) não carregou neste ambiente — não é possível gerar o .zip aqui.';
+    return;
+  }
+  genStatus.textContent = 'Gerando imagens...';
+  try{
+    const s = currentSheet();
+    const zip = new JSZip();
+    const usedNames = new Set();
+
+    for(const v of variants){
+      const composedDataUrl = await composeVariantImage(v);
+      let filename = buildFilenameForVariant(v, s);
+      // avoid silently overwriting files with identical names inside the zip
+      // (e.g. two variants with the same/empty name)
+      let unique = filename;
+      let n = 2;
+      while(usedNames.has(unique)){
+        unique = filename.replace(/\.png$/, `_${n}.png`);
+        n++;
+      }
+      usedNames.add(unique);
+
+      const base64 = composedDataUrl.split(',')[1];
+      zip.file(unique, base64, {base64: true});
+    }
+
+    const blob = await zip.generateAsync({type:'blob'});
+    const blobUrl = URL.createObjectURL(blob);
+    const zipFilename = buildZipFilename(s);
+    showDownloadLink(blobUrl, zipFilename, zipFilename, `${variants.length} imagem(ns) pronta(s).`);
+  }catch(err){
+    console.error(err);
+    genStatus.innerHTML = '<span style="color:#8a4b2e">Erro ao gerar as imagens: ' + err.message + '</span>';
+    diag.log('Erro ZIP: ' + err.stack);
+  }
+});
+
+// ---------- Generate final PDF: one page per variant, sheet repeated, variant name re-drawn as sharp text ----------
+document.getElementById('generateBtn').addEventListener('click', async ()=>{
+  if(variants.length === 0){
+    genStatus.textContent = 'Nenhuma variante selecionada ainda — marque ao menos uma foto no book.';
+    return;
+  }
+  genStatus.textContent = 'Gerando PDF...';
+  try{
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({unit:'pt', format:'a4'});
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const s = currentSheet();
+
+    for(let idx=0; idx<variants.length; idx++){
+      const v = variants[idx];
+      if(idx>0) doc.addPage();
+
+      const marginX = 48;
+      let y = 60;
+
+      doc.setFont('times','normal');
+      doc.setFontSize(26);
+      doc.text(s.nome || 'Tecido', pageW/2, y, {align:'center'});
+      y += 40;
+
+      doc.setFont('helvetica','normal');
+      doc.setFontSize(12);
+      const lines = [
+        [`Referência: `, s.ref],
+        [`Comp: `, s.comp],
+        [`Largura: `, s.largura],
+        [`Gramatura: `, s.gram],
+        [`Processo: `, s.processo],
+      ];
+      lines.forEach(([label, val])=>{
+        doc.setFont('helvetica','normal');
+        doc.text(label, marginX, y);
+        const labelW = doc.getTextWidth(label);
+        doc.setFont('helvetica','bold');
+        doc.text(val || '—', marginX + labelW, y);
+        y += 20;
+      });
+
+      if(careIconDataUrl){
+        try{
+          const careProps = doc.getImageProperties(careIconDataUrl);
+          const careW = 150;
+          const careH = careW * (careProps.height/careProps.width);
+          doc.addImage(careIconDataUrl, 'PNG', pageW - marginX - careW, 60, careW, careH);
+        }catch(e){ /* ignore icon placement failure */ }
+      }
+
+      y += 20;
+
+      const imgProps = doc.getImageProperties(v.photoDataUrl);
+      const maxImgW = pageW - marginX*2;
+      const reservedForCaption = v.variantName ? 28 : 0;
+      const maxImgH = pageH - y - 50 - reservedForCaption;
+      let imgW = maxImgW;
+      let imgH = imgW * (imgProps.height/imgProps.width);
+      if(imgH > maxImgH){
+        imgH = maxImgH;
+        imgW = imgH * (imgProps.width/imgProps.height);
+      }
+      const imgX = (pageW - imgW)/2;
+      doc.addImage(v.photoDataUrl, 'PNG', imgX, y, imgW, imgH);
+
+      if(v.variantName){
+        doc.setFont('helvetica','normal');
+        doc.setFontSize(14);
+        doc.text(v.variantName, pageW/2, y + imgH + 26, {align:'center'});
+      }
+    }
+
+    const blobUrl = doc.output('bloburl');
+    const pdfFilename = (sanitizeForFilename([s.nome, s.processo, 'APP CATALOGO'].filter(Boolean).join('_')) || 'CATALOGO POR VARIANTE') + '.pdf';
+    showDownloadLink(blobUrl, pdfFilename, pdfFilename, `PDF pronto com ${variants.length} página(s).`);
+  }catch(err){
+    console.error(err);
+    genStatus.innerHTML = '<span style="color:#8a4b2e">Erro ao gerar PDF: ' + err.message + '</span>';
+    diag.log('Erro PDF: ' + err.stack);
+  }
+});
+
+// ---------- PWA: register service worker ----------
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('./sw.js')
+      .then(reg => diag.log('Service worker registrado: ' + reg.scope))
+      .catch(err => diag.log('Service worker falhou: ' + err.message));
+  });
+}
+</script>
+</body>
+</html>
