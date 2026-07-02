@@ -518,6 +518,7 @@ let coverText = ''; // text captured from page 1, kept for diagnostics
 let docCaptionPool = []; // color-name captions extracted from PDF text (e.g. "PVLW/801 DENIM"), consumed in selection order
 let nextMark = 'photo'; // alternates 'photo' -> 'text' -> 'photo' .., global across the whole document
 let careIconDataUrl = null; // single crop reused on every generated page
+let careSearchBands = {}; // {pageNum: {y0,y1}} vertical band (canvas px) of the technical-sheet text, used to narrow the wash-care icon search and avoid picking up unrelated page content
 let careMarkModeActive = false; // true after the user clicks "Marcar manualmente (roxo)", consumes exactly one selection
 let undoStack = []; // most recent action last; each entry knows how to reverse itself
 
@@ -645,13 +646,16 @@ async function handleFile(file){
 
     let fullText = '';
     let textWithoutCover = '';
+    careSearchBands = {};
     for(let p=1; p<=pdf.numPages; p++){
       const page = await pdf.getPage(p);
       const textContent = await page.getTextContent();
-      const pageText = textContent.items.map(it=>it.str).join(' ');
+      const pageText = itemsToVisualText(textContent.items);
       fullText += '\n' + pageText;
       if(p === 1) coverText = pageText; // kept for diagnostics, no longer used for name extraction
       else textWithoutCover += '\n' + pageText;
+      const band = computeSheetTextBand(page, textContent, 2.5);
+      if(band) careSearchBands[p] = band;
       await renderPageWithOverlay(page, p, pdf.numPages);
     }
 
@@ -1072,6 +1076,77 @@ function renderCropList(){
   updateSheetCount();
 }
 
+// pdf.js's textContent.items come out in PDF content-stream order, which is
+// often NOT the same as visual reading order — e.g. a caption drawn under an
+// image can appear in the stream before the page title above it. That broke
+// name/field extraction (the "first line" ended up being some unrelated
+// caption). This reconstructs real reading order from each item's own (x,y)
+// position: group items into visual lines by y-proximity, sort each line
+// left-to-right, then sort lines top-to-bottom (PDF y grows upward, so
+// larger y = higher on the page).
+function itemsToVisualText(items){
+  const withPos = items
+    .filter(it => it.str && it.str.trim().length > 0)
+    .map(it => ({str: it.str, x: it.transform[4], y: it.transform[5]}));
+  withPos.sort((a,b)=> b.y - a.y || a.x - b.x);
+
+  const lineTol = 4; // pt tolerance for "same visual line"
+  const lines = [];
+  for(const it of withPos){
+    let line = lines.find(l => Math.abs(l.y - it.y) <= lineTol);
+    if(!line){ line = {y: it.y, items: []}; lines.push(line); }
+    line.items.push(it);
+  }
+  lines.sort((a,b)=> b.y - a.y);
+  return lines.map(l => l.items.sort((a,b)=>a.x-b.x).map(i=>i.str).join(' ')).join('\n');
+}
+
+// Finds the band (in rendered-canvas pixel space) occupied by the
+// technical-sheet text (Referência/Composição/Largura/.../Processo). Used to
+// narrow the automatic wash-care icon search to the area where the icons are
+// actually printed, instead of scanning the whole page and risking a false
+// match elsewhere (e.g. a color-name caption under a swatch, or one of the
+// sheet's own field values, both of which can look like "a row of small
+// marks" at a glance). The icons in these catalogs sit to the right of the
+// printed sheet text, roughly level with it vertically, so besides a
+// vertical range this also returns xMin: everything left of it is real
+// sheet text and can be skipped.
+function computeSheetTextBand(page, textContent, scale){
+  const viewport = page.getViewport({scale});
+  const labelRe = /(Refer[êe]ncia|Comp(?:osi[çc][ãa]o)?|Largura|Larg|Gramatura|Gr\s*:|Processo|Titulagem|Acabamento)/i;
+  const withPos = textContent.items
+    .filter(it => it.str && it.str.trim().length > 0)
+    .map(it => {
+      const [vx0, vy] = viewport.convertToViewportPoint(it.transform[4], it.transform[5]);
+      const [vx1] = viewport.convertToViewportPoint(it.transform[4] + it.width, it.transform[5]);
+      return {str: it.str, vx0, vx1, vy};
+    });
+
+  let minY = Infinity, maxY = -Infinity;
+  for(const it of withPos){
+    if(!labelRe.test(it.str)) continue;
+    if(it.vy < minY) minY = it.vy;
+    if(it.vy > maxY) maxY = it.vy;
+  }
+  if(!isFinite(minY)) return null;
+
+  const linePad = 22 * scale; // rough line-height at this scale, for padding above/below
+  const y0 = Math.max(0, minY - linePad*0.8);
+  const y1 = maxY + linePad*1.6;
+
+  // Right edge of the printed sheet text block: any item whose line falls
+  // within this vertical span, not just the ones carrying a recognized
+  // label (a line like "Largura: 1,50MT.  Acabamento: Carbon Peach" has
+  // several items, and the icons need to clear all of them, not just the
+  // first).
+  let xRightEdge = 0;
+  for(const it of withPos){
+    if(it.vy >= y0 && it.vy <= y1 && it.vx1 > xRightEdge) xRightEdge = it.vx1;
+  }
+
+  return { y0, y1, xMin: xRightEdge + 14*scale };
+}
+
 // Simplified approach: the product name is almost always the very first
 // line of text that appears once we skip the cover page (page 1), since
 // the cover is often a pure image/photo with no extractable text at all
@@ -1081,10 +1156,8 @@ function renderCropList(){
 function extractNameFromFirstLine(textWithoutCover){
   const trimmed = (textWithoutCover || '').trim();
   if(!trimmed) return '';
-  // pdf.js text items are joined with spaces per page and pages are joined
-  // with newlines, so the "first line" here is the first page's text up to
-  // the first stretch that looks like the start of a labeled field
-  // (Referência, Comp, Largura, etc.) or a newline — whichever comes first.
+  // Each page contributes one or more visual lines (see itemsToVisualText),
+  // separated by '\n'; the very first one is the page's topmost text line.
   const firstPageText = trimmed.split('\n')[0].trim();
   const cutMatch = firstPageText.match(/\b(Refer[êe]ncia|Comp(?:osi[çc][ãa]o)?|Largura|Larg|Gramatura|Gr|Processo)\s*:/i);
   const head = (cutMatch ? firstPageText.slice(0, cutMatch.index) : firstPageText).trim();
@@ -1100,20 +1173,25 @@ function extractNameFromFirstLine(textWithoutCover){
 // This is approximate and will sometimes pick the wrong region (e.g. a
 // short text caption can look similar); the "Marcar manualmente" button is
 // the reliable fallback/override for whenever this guesses wrong.
-function findIconRowOnCanvas(canvas){
+function findIconRowOnCanvas(canvas, band){
   const w = canvas.width, h = canvas.height;
   const ctx = canvas.getContext('2d');
   const imgData = ctx.getImageData(0, 0, w, h).data;
 
   // Downscale factor for the scan to keep this fast on a phone — we don't
   // need full resolution to find blob shapes, just their approximate
-  // bounding boxes.
-  const step = Math.max(1, Math.round(Math.min(w,h) / 900));
+  // bounding boxes. When a search band is known (the technical-sheet area),
+  // most of the page is skipped anyway, so a finer step is affordable and
+  // helps catch thin icon strokes that a coarser sample could miss entirely.
+  const step = Math.max(1, Math.round(Math.min(w,h) / (band ? 1400 : 900)));
   const ink = []; // flat boolean grid at the downsampled resolution
   const gw = Math.ceil(w/step), gh = Math.ceil(h/step);
   for(let gy=0; gy<gh; gy++){
+    const y = gy*step;
+    const outsideBandY = band && (y < band.y0 || y > band.y1);
     for(let gx=0; gx<gw; gx++){
-      const x = gx*step, y = gy*step;
+      const x = gx*step;
+      if(outsideBandY || (band && band.xMin && x < band.xMin)){ ink.push(false); continue; }
       const idx = (y*w + x) * 4;
       const r = imgData[idx], g = imgData[idx+1], b = imgData[idx+2];
       const lum = 0.299*r + 0.587*g + 0.114*b;
@@ -1201,13 +1279,19 @@ function findIconRowOnCanvas(canvas){
 
 async function detectCareIconsAutomatically(){
   document.getElementById('careIconsStatus').textContent = 'Procurando automaticamente...';
-  const pageCanvases = bookCol.querySelectorAll('canvas.basePage');
+  const pageWraps = Array.from(bookCol.querySelectorAll('.pageWrap'));
   const margin = 6;
 
-  for(const canvas of pageCanvases){
+  for(const wrap of pageWraps){
+    const pageNum = Number(wrap.dataset.pageNum);
+    const canvas = wrap.querySelector('canvas.basePage');
+    if(!canvas) continue;
+    const band = careSearchBands[pageNum] || null;
+
+    diag.log(`página ${pageNum}: buscando ícones de cuidado ${band ? `na faixa da ficha técnica (y ${Math.round(band.y0)}-${Math.round(band.y1)}px, x > ${Math.round(band.xMin)}px)` : '(faixa da ficha técnica não identificada — varrendo a página inteira)'}`);
     let candidates = [];
     try{
-      candidates = findIconRowOnCanvas(canvas);
+      candidates = findIconRowOnCanvas(canvas, band);
     }catch(e){
       diag.log('Detecção automática de ícones falhou nessa página: ' + e.message);
       continue;
