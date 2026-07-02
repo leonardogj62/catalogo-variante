@@ -447,7 +447,8 @@
       <div class="panel hidden" id="cropsPanel">
         <div class="step">2</div><b style="font-size:13px;">Variantes selecionadas</b>
         <p class="sub" style="margin:8px 0;">Marque primeiro a <b style="color:#e0593e;">foto</b> (vermelho) e depois o <b style="color:#2f9e57;">texto</b> abaixo dela (verde) para cada variante, na ordem do book.</p>
-        <button id="undoBtn" class="secondary" style="margin-bottom:10px;" disabled>↶ Desfazer última seleção</button>
+        <div id="autoDetectStatus" class="care-note hidden"></div>
+        <button id="undoBtn" class="secondary" style="margin:10px 0;" disabled>↶ Desfazer última seleção</button>
         <div class="cropList" id="cropList">
           <div class="empty-note" id="emptyNote">Nenhuma variante selecionada ainda. Desenhe um retângulo vermelho sobre a foto, depois um verde sobre o texto abaixo.</div>
         </div>
@@ -629,6 +630,9 @@ async function handleFile(file){
   updateUndoButton();
   renderCropList();
   updateSheetCount();
+  const autoStatusEl = document.getElementById('autoDetectStatus');
+  autoStatusEl.textContent = '';
+  autoStatusEl.classList.add('hidden');
   // remove any previously rendered pages (keep the upload panel, which is bookCol's first child)
   Array.from(bookCol.children).slice(1).forEach(el=>el.remove());
 
@@ -667,9 +671,10 @@ async function handleFile(file){
 
     careIconDataUrl = null;
     careMarkModeActive = false;
+    await detectVariantSwatchesAutomatically();
     await detectCareIconsAutomatically();
 
-    setStatus(`Pronto. Confira a ficha técnica acima e marque cada variante no book: primeiro a foto (vermelho), depois o texto abaixo dela (verde). A página 1 costuma ser a capa — pode pular.`);
+    setStatus(`Pronto. Confira a ficha técnica acima. Tentei marcar os quadrados de cor automaticamente — confira o resultado abaixo. O que não for reconhecido, marque manualmente: primeiro a foto (vermelho), depois o texto abaixo dela (verde). A página 1 costuma ser a capa — pode pular.`);
   }catch(err){
     console.error(err);
     diag.log('Erro: ' + err.message);
@@ -687,6 +692,7 @@ async function renderPageWithOverlay(page, pageNum, totalPages){
   const wrap = document.createElement('div');
   wrap.className = 'pageWrap';
   wrap.style.width = viewport.width + 'px';
+  wrap.dataset.pageNum = pageNum;
 
   const labelRow = document.createElement('div');
   labelRow.className = 'pageLabel';
@@ -721,6 +727,25 @@ async function renderPageWithOverlay(page, pageNum, totalPages){
   bookCol.appendChild(wrap);
 
   wireSelection(wrap, overlay, canvas, pageNum);
+}
+
+// Wire a delete control ("×" on a rectBox) to fire on both real clicks
+// (desktop/mouse) and touchend (mobile) directly — we don't rely on the
+// browser's synthetic "click" event after a tap, since touch-action:none on
+// the drawing overlay above can suppress or delay it. stopPropagation also
+// prevents the tap from being picked up as the start of a new drag. Shared
+// by both manually-drawn boxes and auto-detected swatch boxes.
+function wireDelete(el, handler){
+  let handled = false;
+  const run = (ev)=>{
+    ev.preventDefault();
+    ev.stopPropagation();
+    if(handled) return; // avoid double-firing from both touchend and click
+    handled = true;
+    handler();
+  };
+  el.addEventListener('touchend', run, {passive:false});
+  el.addEventListener('click', run);
 }
 
 // ---------- Pointer-drag rectangle selection over a rendered page ----------
@@ -890,24 +915,6 @@ function wireSelection(wrap, overlay, canvas, pageNum){
     del.className = 'rectDel';
     del.textContent = '×';
     liveBox.appendChild(del);
-
-    // Wire the delete control to fire on both real clicks (desktop/mouse)
-    // and touchend (mobile) directly — we don't rely on the browser's
-    // synthetic "click" event after a tap, since touch-action:none on the
-    // drawing overlay above can suppress or delay it. stopPropagation also
-    // prevents the tap from being picked up as the start of a new drag.
-    function wireDelete(el, handler){
-      let handled = false;
-      const run = (ev)=>{
-        ev.preventDefault();
-        ev.stopPropagation();
-        if(handled) return; // avoid double-firing from both touchend and click
-        handled = true;
-        handler();
-      };
-      el.addEventListener('touchend', run, {passive:false});
-      el.addEventListener('click', run);
-    }
 
     if(kind === 'photo'){
       variantCounter++;
@@ -1271,6 +1278,242 @@ document.getElementById('markCareBtn').addEventListener('click', ()=>{
   careMarkModeActive = true;
   document.getElementById('careIconsStatus').textContent = 'Modo roxo ativo: desenhe um retângulo sobre os ícones de lavagem em qualquer página do book.';
 });
+
+// ---------- Automatic color-swatch detection ----------
+// Heuristic: fabric swatches in these catalogs are large, solid rectangular
+// blocks of (near-)uniform color sitting on the white page background, laid
+// out in a simple grid with a caption line directly underneath each one.
+// That's a very different shape than body text (many small, sparse,
+// disconnected components) or the wash-care icon row (a thin strip of tiny
+// marks), so a connected-components scan with a size + fill-density filter
+// picks them out reliably without needing OCR. Anything the heuristic
+// misses is still left for the existing manual red/green marking flow.
+function cropCanvasRegion(canvas, x, y, w, h){
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w));
+  c.height = Math.max(1, Math.round(h));
+  const cctx = c.getContext('2d');
+  cctx.imageSmoothingEnabled = true;
+  cctx.imageSmoothingQuality = 'high';
+  cctx.drawImage(canvas, x, y, w, h, 0, 0, c.width, c.height);
+  return c.toDataURL('image/png');
+}
+
+function findColorSwatchesOnCanvas(canvas){
+  const w = canvas.width, h = canvas.height;
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.getImageData(0, 0, w, h).data;
+
+  // Downsample for speed; fine enough to keep swatch bounding boxes accurate.
+  const step = Math.max(1, Math.round(Math.min(w, h) / 450));
+  const gw = Math.ceil(w / step), gh = Math.ceil(h / step);
+  const WHITE = 242; // pixel counts as "page background" if all channels are this bright or brighter
+  const ink = new Uint8Array(gw * gh);
+  for(let gy=0; gy<gh; gy++){
+    for(let gx=0; gx<gw; gx++){
+      const x = Math.min(w-1, gx*step), y = Math.min(h-1, gy*step);
+      const idx = (y*w + x) * 4;
+      const isWhite = imgData[idx] >= WHITE && imgData[idx+1] >= WHITE && imgData[idx+2] >= WHITE;
+      ink[gy*gw+gx] = isWhite ? 0 : 1;
+    }
+  }
+
+  const visited = new Uint8Array(gw*gh);
+  const components = [];
+  for(let gy=0; gy<gh; gy++){
+    for(let gx=0; gx<gw; gx++){
+      const i = gy*gw+gx;
+      if(!ink[i] || visited[i]) continue;
+      const stack = [i];
+      visited[i] = 1;
+      let minX=gx,maxX=gx,minY=gy,maxY=gy,count=0;
+      while(stack.length){
+        const cur = stack.pop();
+        const cy = Math.floor(cur/gw), cx = cur%gw;
+        count++;
+        if(cx<minX)minX=cx; if(cx>maxX)maxX=cx;
+        if(cy<minY)minY=cy; if(cy>maxY)maxY=cy;
+        const neighbors = [cur-1,cur+1,cur-gw,cur+gw];
+        for(const n of neighbors){
+          if(n<0 || n>=gw*gh) continue;
+          if(Math.floor(n/gw) !== cy && Math.abs(n-cur)===1) continue; // avoid row-wrap
+          if(!visited[n] && ink[n]){ visited[n]=1; stack.push(n); }
+        }
+      }
+      components.push({minX,maxX,minY,maxY,count});
+    }
+  }
+
+  const candidates = components.map(c=>{
+    const x0 = c.minX*step, y0 = c.minY*step, x1 = Math.min(w, (c.maxX+1)*step), y1 = Math.min(h, (c.maxY+1)*step);
+    const bboxArea = (c.maxX-c.minX+1) * (c.maxY-c.minY+1);
+    const density = c.count / Math.max(bboxArea, 1);
+    return {x0,y0,x1,y1, w:x1-x0, h:y1-y0, density};
+  }).filter(c =>
+    c.w > w*0.12 && c.w < w*0.65 &&   // a plausible single-swatch width
+    c.h > h*0.06 && c.h < h*0.45 &&   // a plausible single-swatch height
+    c.density > 0.55                  // solid fill, not sparse text/paragraphs
+  );
+
+  // Reading order: top-to-bottom, then left-to-right within roughly the same row.
+  const rowTol = h*0.05;
+  candidates.sort((a,b)=> (Math.abs(a.y0-b.y0) > rowTol ? a.y0-b.y0 : a.x0-b.x0));
+  return candidates;
+}
+
+// Looks for a single band of ink directly beneath a detected swatch — the
+// color-name caption that these catalogs print right under each photo.
+function findCaptionBelowSwatch(canvas, swatch){
+  const w = canvas.width, h = canvas.height;
+  const searchTop = swatch.y1;
+  const searchBottom = Math.min(h, swatch.y1 + h*0.09);
+  if(searchBottom - searchTop < 6) return null;
+
+  const xPad = swatch.w*0.15;
+  const x0 = Math.max(0, Math.round(swatch.x0 - xPad));
+  const x1 = Math.min(w, Math.round(swatch.x1 + xPad));
+  const rw = x1-x0, rh = Math.round(searchBottom-searchTop);
+  if(rw <= 0 || rh <= 0) return null;
+
+  const region = canvas.getContext('2d').getImageData(x0, Math.round(searchTop), rw, rh).data;
+  const rowHasInk = new Array(rh).fill(false);
+  for(let y=0; y<rh; y++){
+    let inkCount = 0;
+    for(let x=0; x<rw; x+=2){
+      const idx = (y*rw+x)*4;
+      if(region[idx] < 235 || region[idx+1] < 235 || region[idx+2] < 235) inkCount++;
+    }
+    rowHasInk[y] = inkCount > 2;
+  }
+
+  let top=-1, bottom=-1;
+  for(let y=0; y<rh; y++){
+    if(rowHasInk[y]){ if(top===-1) top=y; bottom=y; }
+  }
+  if(top===-1) return null;
+
+  const padY = 4;
+  const cropY0 = Math.max(0, Math.round(searchTop)+top-padY);
+  const cropY1 = Math.min(h, Math.round(searchTop)+bottom+1+padY);
+  if(cropY1-cropY0 < 6 || cropY1-cropY0 > h*0.08) return null;
+
+  return {x0, y0:cropY0, x1, y1:cropY1};
+}
+
+// Converts a rectangle in canvas pixel space (device pixels) to the overlay
+// element's own CSS pixel space, mirroring the inverse of the scale math
+// used in wireSelection's pointFromEvent for manually-drawn boxes.
+function canvasRectToOverlayPx(overlay, canvas, x0, y0, w, h){
+  const rect = overlay.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return { left: x0/scaleX, top: y0/scaleY, width: w/scaleX, height: h/scaleY };
+}
+
+function drawAutoBox(overlay, canvas, rectPx, isText, tagText){
+  const pos = canvasRectToOverlayPx(overlay, canvas, rectPx.x0, rectPx.y0, rectPx.w, rectPx.h);
+  const box = document.createElement('div');
+  box.className = 'rectBox' + (isText ? ' rectBox-text' : '');
+  box.style.left = pos.left+'px';
+  box.style.top = pos.top+'px';
+  box.style.width = pos.width+'px';
+  box.style.height = pos.height+'px';
+
+  const tag = document.createElement('div');
+  tag.className = 'rectTag';
+  tag.textContent = tagText;
+  box.appendChild(tag);
+
+  const del = document.createElement('div');
+  del.className = 'rectDel';
+  del.textContent = '×';
+  box.appendChild(del);
+
+  overlay.appendChild(box);
+  return {box, del};
+}
+
+function addAutoDetectedVariant(overlay, canvas, pageNum, swatch, caption){
+  variantCounter++;
+  const id = 'variant_'+variantCounter;
+  const photoDataUrl = cropCanvasRegion(canvas, swatch.x0, swatch.y0, swatch.w, swatch.h);
+  const v = {id, photoDataUrl, textDataUrl:null, variantName:'', ocrAttempted:false, pageNum};
+  variants.push(v);
+
+  const photoUi = drawAutoBox(overlay, canvas, swatch, false, '#'+variantCounter+' foto (auto)');
+  let textUi = null;
+
+  const removeVariant = ()=>{
+    variants = variants.filter(x=>x.id !== id);
+    photoUi.box.remove();
+    if(textUi) textUi.box.remove();
+    renderCropList();
+    updateSheetCount();
+  };
+  wireDelete(photoUi.del, removeVariant);
+  pushUndo({ undo: removeVariant });
+
+  if(caption){
+    const captionRect = {x0:caption.x0, y0:caption.y0, w:caption.x1-caption.x0, h:caption.y1-caption.y0};
+    v.textDataUrl = cropCanvasRegion(canvas, captionRect.x0, captionRect.y0, captionRect.w, captionRect.h);
+    textUi = drawAutoBox(overlay, canvas, captionRect, true, '#'+variantCounter+' texto (auto)');
+    wireDelete(textUi.del, ()=>{
+      v.textDataUrl = null;
+      v.variantName = '';
+      v.ocrAttempted = false;
+      v.ocrConfident = undefined;
+      textUi.box.remove();
+      renderCropList();
+    });
+
+    if(docCaptionPool.length > 0){
+      const suggestion = docCaptionPool.shift();
+      if(suggestion) v.variantName = suggestion;
+    }
+    runOcrOnVariant(v, v.textDataUrl);
+  }
+
+  renderCropList();
+  updateSheetCount();
+}
+
+// Runs after all pages are rendered and docCaptionPool is built. Skips page 1
+// (the cover, which never contains color swatches in these catalogs).
+async function detectVariantSwatchesAutomatically(){
+  const autoStatus = document.getElementById('autoDetectStatus');
+  autoStatus.classList.remove('hidden');
+  autoStatus.textContent = 'Procurando automaticamente os quadrados de cor...';
+
+  const pageWraps = Array.from(bookCol.querySelectorAll('.pageWrap')).filter(w => Number(w.dataset.pageNum) > 1);
+  let found = 0;
+  for(const wrap of pageWraps){
+    const pageNum = Number(wrap.dataset.pageNum);
+    const canvas = wrap.querySelector('canvas.basePage');
+    const overlay = wrap.querySelector('.selOverlay');
+    if(!canvas || !overlay) continue;
+
+    let swatches = [];
+    try{
+      swatches = findColorSwatchesOnCanvas(canvas);
+    }catch(e){
+      diag.log(`detecção automática de quadrados falhou na página ${pageNum}: ${e.message}`);
+      continue;
+    }
+
+    for(const swatch of swatches){
+      const caption = findCaptionBelowSwatch(canvas, swatch);
+      addAutoDetectedVariant(overlay, canvas, pageNum, swatch, caption);
+      found++;
+    }
+    diag.log(`página ${pageNum}: ${swatches.length} quadrado(s) de cor detectado(s) automaticamente`);
+  }
+
+  if(found > 0){
+    autoStatus.textContent = `Detecção automática encontrou ${found} variante(s). Confira as fotos/nomes e use os botões "×"/remover para corrigir o que estiver errado — o que não for reconhecido, marque manualmente (vermelho = foto, verde = texto).`;
+  } else {
+    autoStatus.textContent = 'Não consegui reconhecer os quadrados automaticamente neste book — marque manualmente (vermelho = foto, verde = texto).';
+  }
+}
 
 // ---------- Field extraction (regex over concatenated page text) ----------
 function extractFields(text, textWithoutCover){
