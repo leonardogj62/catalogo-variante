@@ -158,6 +158,19 @@
     cursor:crosshair;
     touch-action:pan-y;
   }
+  .pageWrap.zoomed{
+    max-height:75vh;
+    overflow:auto;
+    -webkit-overflow-scrolling:touch;
+  }
+  .pageWrap.zoomed canvas.basePage{
+    max-width:none;
+  }
+  .zoomHint{
+    font-size:11px;
+    color:var(--accent);
+    margin-left:6px;
+  }
   .pageLabel{
     font-size:11px;
     color:#999;
@@ -887,6 +900,10 @@ function mountPageCanvas(canvas, labelText, pageNum, flagText){
     flag.textContent = flagText;
     labelRow.appendChild(flag);
   }
+  const zoomHint = document.createElement('span');
+  zoomHint.className = 'zoomHint';
+  zoomHint.textContent = '🔍 toque/clique 2x para dar zoom';
+  labelRow.appendChild(zoomHint);
 
   const overlay = document.createElement('div');
   overlay.className = 'selOverlay';
@@ -982,6 +999,45 @@ function wireSelection(wrap, overlay, canvas, pageNum){
     };
   }
 
+  // Double-click/double-tap zoom: the page canvas is normally shrunk to fit
+  // the screen, which makes it hard to draw a tight, precise selection —
+  // and a tight selection is exactly what gets the best OCR results (see
+  // notes on recognizeSheetFromImage). Zooming shows the canvas at its own
+  // native pixel resolution (the photo/PDF render already has that detail;
+  // this just stops throwing it away visually) inside a scrollable window,
+  // centered on wherever the user double-tapped.
+  function toggleZoom(clientX, clientY){
+    const rect = overlay.getBoundingClientRect();
+    if(wrap.classList.contains('zoomed')){
+      wrap.classList.remove('zoomed');
+      canvas.style.width = '';
+      overlay.style.width = '';
+      overlay.style.height = '';
+      wrap.scrollLeft = 0;
+      wrap.scrollTop = 0;
+    } else {
+      const fx = (clientX - rect.left) / rect.width;
+      const fy = (clientY - rect.top) / rect.height;
+      wrap.classList.add('zoomed');
+      canvas.style.width = canvas.width + 'px';
+      overlay.style.width = canvas.width + 'px';
+      overlay.style.height = canvas.height + 'px';
+      requestAnimationFrame(()=>{
+        wrap.scrollLeft = Math.max(0, fx*canvas.width - wrap.clientWidth/2);
+        wrap.scrollTop = Math.max(0, fy*canvas.height - wrap.clientHeight/2);
+      });
+    }
+  }
+
+  let lastTapTime = 0, lastTapX = 0, lastTapY = 0;
+  function checkDoubleTap(clientX, clientY){
+    const now = Date.now();
+    const isDouble = (now - lastTapTime) < 350 && Math.abs(clientX-lastTapX) < 30 && Math.abs(clientY-lastTapY) < 30;
+    lastTapTime = isDouble ? 0 : now; // consume so a third quick tap doesn't chain into another toggle
+    lastTapX = clientX; lastTapY = clientY;
+    return isDouble;
+  }
+
   function startDrawing(p){
     state = 'drawing';
     liveBox = document.createElement('div');
@@ -1040,7 +1096,15 @@ function wireSelection(wrap, overlay, canvas, pageNum){
   async function onUp(e){
     const wasDrawing = (state === 'drawing');
     state = 'idle';
-    if(!wasDrawing) return;
+    if(!wasDrawing){
+      // Not a drag — check whether it's the second tap of a double-tap
+      // (touch devices have no native dblclick), and toggle zoom if so.
+      if(e.changedTouches && e.changedTouches.length){
+        const t = e.changedTouches[0];
+        if(checkDoubleTap(t.clientX, t.clientY)) toggleZoom(t.clientX, t.clientY);
+      }
+      return;
+    }
     const p = pointFromEvent(e.changedTouches ? {touches:e.changedTouches} : e);
     const x0 = Math.min(p.x, startX), y0 = Math.min(p.y, startY);
     const wPx = Math.abs(p.x - startX), hPx = Math.abs(p.y - startY);
@@ -1247,6 +1311,10 @@ function wireSelection(wrap, overlay, canvas, pageNum){
   overlay.addEventListener('touchstart', onDown, {passive:false});
   overlay.addEventListener('touchmove', onMove, {passive:false});
   overlay.addEventListener('touchend', onUp);
+  overlay.addEventListener('dblclick', (e)=>{
+    e.preventDefault();
+    toggleZoom(e.clientX, e.clientY);
+  });
 }
 
 // ---------- Crop list (sidebar) ----------
