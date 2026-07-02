@@ -186,6 +186,10 @@
     border-color:#7b4fae;
     background:rgba(123,79,174,0.12);
   }
+  .rectBox.rectBox-sheet{
+    border-color:#2f6fae;
+    background:rgba(47,111,174,0.12);
+  }
   .rectBox .rectTag{
     position:absolute;
     top:-22px;
@@ -203,6 +207,9 @@
   }
   .rectBox.rectBox-care .rectTag{
     background:#7b4fae;
+  }
+  .rectBox.rectBox-sheet .rectTag{
+    background:#2f6fae;
   }
   .rectBox .rectDel{
     position:absolute;
@@ -223,6 +230,9 @@
   .rectBox.rectBox-text .rectDel{
     background:#2f9e57;
   }
+  .rectBox.rectBox-sheet .rectDel{
+    background:#2f6fae;
+  }
   .rectBox.rectBox-care .rectDel{
     background:#7b4fae;
   }
@@ -231,6 +241,26 @@
     border:1px solid var(--line);
     border-radius:10px;
     padding:16px;
+  }
+  .modeTabs{
+    display:flex;
+    gap:8px;
+    margin-bottom:14px;
+    width:100%;
+    max-width:640px;
+  }
+  .modeTab{
+    flex:1;
+    width:auto;
+    background:#fff;
+    color:#6b6a64;
+    border:1px solid var(--line);
+    font-weight:600;
+  }
+  .modeTab.active{
+    background:var(--accent);
+    color:#fff;
+    border-color:var(--accent);
   }
   .drop{
     border:1.5px dashed var(--line);
@@ -396,12 +426,16 @@
 
 <div class="topbar">
   <h1>Catálogo por variante</h1>
-  <p class="sub">Selecione com o mouse/dedo cada variante no book. A capa pode ser ignorada — só marque as fotos das cores.</p>
+  <p class="sub">Envie o PDF do book de um fornecedor ou fotos de etiquetas físicas, e selecione com o mouse/dedo cada variante.</p>
 </div>
 
 <div class="layout">
   <div class="bookCol" id="bookCol">
-    <div class="panel" style="width:100%; max-width:640px;">
+    <div class="modeTabs" id="modeTabs">
+      <button type="button" class="modeTab active" id="modePdfBtn">PDF do book</button>
+      <button type="button" class="modeTab" id="modePhotoBtn">Fotos de etiqueta</button>
+    </div>
+    <div class="panel" style="width:100%; max-width:640px;" id="pdfUploadPanel">
       <label class="drop" id="dropZone">
         <input type="file" id="fileInput" accept="application/pdf">
         <div class="drop-label">Arraste o PDF do book aqui ou <b>clique para escolher</b></div>
@@ -410,7 +444,15 @@
       <span class="toggleDiag" id="toggleDiag">mostrar diagnóstico técnico ▾</span>
       <pre id="diagLog" class="diagLog hidden"></pre>
     </div>
-    <!-- rendered pages get appended here -->
+    <div class="panel hidden" style="width:100%; max-width:640px;" id="photoUploadPanel">
+      <label class="drop" id="photoDropZone">
+        <input type="file" id="photoInput" accept="image/*" multiple>
+        <div class="drop-label">Arraste as fotos de um produto (todas as cores) aqui ou <b>clique para escolher</b></div>
+      </label>
+      <div class="care-note">Selecione de uma vez todas as fotos das variações de cor de UM produto. Cada foto vira uma variante; a ficha técnica é lida uma única vez a partir da etiqueta marcada em azul.</div>
+      <div class="status" id="photoStatus"></div>
+    </div>
+    <!-- rendered pages/photos get appended here -->
   </div>
 
   <div class="sideCol" id="sideCol">
@@ -430,7 +472,11 @@
           <tr><td class="label">Gramatura</td><td><input id="f_gram"></td></tr>
           <tr><td class="label">Processo</td><td><input id="f_processo"></td></tr>
         </table>
-        <div class="care-note">Esses campos foram lidos automaticamente do texto do PDF — confira e corrija se precisar. O nome do tecido também é lido da capa, se encontrado lá.</div>
+        <div class="care-note" id="fieldsPanelNotePdf">Esses campos foram lidos automaticamente do texto do PDF — confira e corrija se precisar. O nome do tecido também é lido da capa, se encontrado lá.</div>
+        <div class="care-note hidden" id="fieldsPanelNotePhoto">Marque em azul a tabela da etiqueta em qualquer uma das fotos — o app tenta ler o texto automaticamente. A leitura funciona bem melhor em pedaços pequenos (1-2 linhas por vez) do que marcando a tabela inteira de uma vez; pode clicar em "Marcar" de novo quantas vezes precisar, cada marcação só preenche os campos que conseguir ler.</div>
+        <div class="hidden" id="markSheetWrap" style="margin-top:10px;">
+          <button id="markSheetBtn" class="secondary" style="background:#2f6fae; color:#fff; border-color:#2f6fae;">Marcar ficha técnica na foto (azul)</button>
+        </div>
       </div>
 
       <div class="panel hidden" id="careIconsPanel">
@@ -446,7 +492,7 @@
 
       <div class="panel hidden" id="cropsPanel">
         <div class="step">2</div><b style="font-size:13px;">Variantes selecionadas</b>
-        <p class="sub" style="margin:8px 0;">Marque primeiro a <b style="color:#e0593e;">foto</b> (vermelho) e depois o <b style="color:#2f9e57;">texto</b> abaixo dela (verde) para cada variante, na ordem do book.</p>
+        <p class="sub" style="margin:8px 0;">Marque primeiro a <b style="color:#e0593e;">foto/bandeira</b> (vermelho) e depois o <b style="color:#2f9e57;">nome da cor</b> (verde) para cada variante.</p>
         <div id="autoDetectStatus" class="care-note hidden"></div>
         <button id="undoBtn" class="secondary" style="margin:10px 0;" disabled>↶ Desfazer última seleção</button>
         <div class="cropList" id="cropList">
@@ -520,7 +566,9 @@ let nextMark = 'photo'; // alternates 'photo' -> 'text' -> 'photo' .., global ac
 let careIconDataUrl = null; // single crop reused on every generated page
 let careSearchBands = {}; // {pageNum: {y0,y1}} vertical band (canvas px) of the technical-sheet text, used to narrow the wash-care icon search and avoid picking up unrelated page content
 let careMarkModeActive = false; // true after the user clicks "Marcar manualmente (roxo)", consumes exactly one selection
+let sheetMarkModeActive = false; // true after "Marcar ficha técnica (azul)" in photo mode, consumes exactly one selection
 let undoStack = []; // most recent action last; each entry knows how to reverse itself
+let appMode = 'pdf'; // 'pdf' | 'photo' — which upload/extraction pipeline is active
 
 function updateSheetCount(){
   document.getElementById('sheetCount').textContent = variants.length;
@@ -613,6 +661,123 @@ fileInput.addEventListener('change', e=>{
   if(e.target.files.length) handleFile(e.target.files[0]);
 });
 
+// ---------- Mode switch: PDF book vs. batch label photos ----------
+const modePdfBtn = document.getElementById('modePdfBtn');
+const modePhotoBtn = document.getElementById('modePhotoBtn');
+const pdfUploadPanel = document.getElementById('pdfUploadPanel');
+const photoUploadPanel = document.getElementById('photoUploadPanel');
+
+function setAppMode(mode){
+  appMode = mode;
+  modePdfBtn.classList.toggle('active', mode === 'pdf');
+  modePhotoBtn.classList.toggle('active', mode === 'photo');
+  pdfUploadPanel.classList.toggle('hidden', mode !== 'pdf');
+  photoUploadPanel.classList.toggle('hidden', mode !== 'photo');
+  document.getElementById('fieldsPanelNotePdf').classList.toggle('hidden', mode !== 'pdf');
+  document.getElementById('fieldsPanelNotePhoto').classList.toggle('hidden', mode !== 'photo');
+  document.getElementById('markSheetWrap').classList.toggle('hidden', mode !== 'photo');
+  resetWorkspace();
+}
+modePdfBtn.addEventListener('click', ()=>setAppMode('pdf'));
+modePhotoBtn.addEventListener('click', ()=>setAppMode('photo'));
+
+// Clears everything currently loaded/marked so switching modes (or starting
+// a new upload) never mixes state from a previous PDF/photo batch.
+function resetWorkspace(){
+  diag.clear();
+  variants = [];
+  variantCounter = 0;
+  nextMark = 'photo';
+  undoStack = [];
+  docCaptionPool = [];
+  careSearchBands = {};
+  careIconDataUrl = null;
+  careMarkModeActive = false;
+  sheetMarkModeActive = false;
+  sheet = {};
+  updateUndoButton();
+  renderCropList();
+  updateSheetCount();
+  renderFieldsPanel();
+  const autoStatusEl = document.getElementById('autoDetectStatus');
+  autoStatusEl.textContent = '';
+  autoStatusEl.classList.add('hidden');
+  document.getElementById('careIconsStatus').textContent = 'Procurando automaticamente...';
+  document.getElementById('careIconsPreviewWrap').classList.add('hidden');
+  fieldsPanel.classList.add('hidden');
+  document.getElementById('careIconsPanel').classList.add('hidden');
+  cropsPanel.classList.add('hidden');
+  genPanel.classList.add('hidden');
+  Array.from(bookCol.children).forEach(el=>{
+    if(el.id !== 'modeTabs' && el.id !== 'pdfUploadPanel' && el.id !== 'photoUploadPanel') el.remove();
+  });
+}
+
+// ---------- Photo batch upload wiring ----------
+const photoDropZone = document.getElementById('photoDropZone');
+const photoInput = document.getElementById('photoInput');
+photoDropZone.addEventListener('dragover', e=>{e.preventDefault(); photoDropZone.classList.add('drag');});
+photoDropZone.addEventListener('dragleave', ()=>photoDropZone.classList.remove('drag'));
+photoDropZone.addEventListener('drop', e=>{
+  e.preventDefault();
+  photoDropZone.classList.remove('drag');
+  if(e.dataTransfer.files.length) handlePhotoBatch(Array.from(e.dataTransfer.files));
+});
+photoInput.addEventListener('change', e=>{
+  if(e.target.files.length) handlePhotoBatch(Array.from(e.target.files));
+});
+
+function loadImageFile(file){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = ()=>{ URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = (e)=>{ URL.revokeObjectURL(url); reject(new Error('falha ao carregar imagem')); };
+    img.src = url;
+  });
+}
+
+async function handlePhotoBatch(files){
+  const imageFiles = files.filter(f => f.type.startsWith('image/'));
+  if(imageFiles.length === 0){
+    document.getElementById('photoStatus').textContent = 'Nenhuma imagem válida selecionada.';
+    return;
+  }
+  resetWorkspace();
+  const photoStatus = document.getElementById('photoStatus');
+  photoStatus.textContent = `Carregando ${imageFiles.length} foto(s)...`;
+
+  // Downscale to a reasonable working resolution — phone photos can be
+  // 40+ megapixels, which is overkill for label OCR/output and would make
+  // canvases and generated PDFs slow or memory-heavy on a phone.
+  const MAX_DIM = 1800;
+
+  for(let i=0; i<imageFiles.length; i++){
+    const file = imageFiles[i];
+    try{
+      const img = await loadImageFile(file);
+      const scale = Math.min(1, MAX_DIM / Math.max(img.naturalWidth, img.naturalHeight));
+      const canvas = document.createElement('canvas');
+      canvas.className = 'basePage';
+      canvas.width = Math.round(img.naturalWidth * scale);
+      canvas.height = Math.round(img.naturalHeight * scale);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      diag.log(`foto ${i+1}/${imageFiles.length} (${file.name}): carregada (${canvas.width}x${canvas.height})`);
+      mountPageCanvas(canvas, `Foto ${i+1} de ${imageFiles.length} — ${file.name}`, i+1);
+    }catch(e){
+      diag.log(`foto ${i+1}: falha ao carregar — ${e.message}`);
+    }
+  }
+
+  fieldsPanel.classList.remove('hidden');
+  document.getElementById('careIconsPanel').classList.remove('hidden');
+  document.getElementById('careIconsStatus').textContent = 'Marque manualmente (roxo) se os ícones de lavagem aparecerem em alguma foto.';
+  cropsPanel.classList.remove('hidden');
+  genPanel.classList.remove('hidden');
+  photoStatus.textContent = `Pronto. Marque a ficha técnica (azul) em uma das fotos, os ícones de lavagem (roxo) se aparecerem, e para cada foto marque a bandeira de tecido (vermelho) e a etiquetinha com o nome da cor (verde).`;
+}
+
 async function handleFile(file){
   if(file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')){
     setStatus('Isso não parece ser um PDF.', true);
@@ -622,20 +787,7 @@ async function handleFile(file){
     setStatus('pdf.js não está disponível neste ambiente.', true);
     return;
   }
-  diag.clear();
-  variants = [];
-  variantCounter = 0;
-  nextMark = 'photo';
-  undoStack = [];
-  docCaptionPool = [];
-  updateUndoButton();
-  renderCropList();
-  updateSheetCount();
-  const autoStatusEl = document.getElementById('autoDetectStatus');
-  autoStatusEl.textContent = '';
-  autoStatusEl.classList.add('hidden');
-  // remove any previously rendered pages (keep the upload panel, which is bookCol's first child)
-  Array.from(bookCol.children).slice(1).forEach(el=>el.remove());
+  resetWorkspace();
 
   setStatus('Lendo PDF...');
   try{
@@ -693,22 +845,6 @@ async function renderPageWithOverlay(page, pageNum, totalPages){
   // memory/perf on a phone become a concern for a multi-page book.
   const viewport = page.getViewport({scale: 2.5});
 
-  const wrap = document.createElement('div');
-  wrap.className = 'pageWrap';
-  wrap.style.width = viewport.width + 'px';
-  wrap.dataset.pageNum = pageNum;
-
-  const labelRow = document.createElement('div');
-  labelRow.className = 'pageLabel';
-  labelRow.style.padding = '4px 0';
-  labelRow.textContent = `Página ${pageNum} de ${totalPages}`;
-  if(pageNum === 1){
-    const flag = document.createElement('span');
-    flag.className = 'cover-flag';
-    flag.textContent = 'provável capa — nome do tecido já foi lido daqui';
-    labelRow.appendChild(flag);
-  }
-
   const canvas = document.createElement('canvas');
   canvas.className = 'basePage';
   canvas.width = viewport.width;
@@ -720,6 +856,32 @@ async function renderPageWithOverlay(page, pageNum, totalPages){
     diag.log(`página ${pageNum}: renderizada (${canvas.width}x${canvas.height})`);
   }catch(e){
     diag.log(`página ${pageNum}: falha ao renderizar — ${e.message}`);
+  }
+
+  const flagText = pageNum === 1 ? 'provável capa — nome do tecido já foi lido daqui' : null;
+  mountPageCanvas(canvas, `Página ${pageNum} de ${totalPages}`, pageNum, flagText);
+}
+
+// Appends a rendered canvas (from a PDF page or a batch photo) to the page
+// column with its label and selection overlay, and wires up the manual
+// red/green/blue/purple marking on it. Shared by both the PDF and photo
+// upload pipelines so the marking/OCR machinery below only has to be
+// written once.
+function mountPageCanvas(canvas, labelText, pageNum, flagText){
+  const wrap = document.createElement('div');
+  wrap.className = 'pageWrap';
+  wrap.style.width = canvas.width + 'px';
+  wrap.dataset.pageNum = pageNum;
+
+  const labelRow = document.createElement('div');
+  labelRow.className = 'pageLabel';
+  labelRow.style.padding = '4px 0';
+  labelRow.textContent = labelText;
+  if(flagText){
+    const flag = document.createElement('span');
+    flag.className = 'cover-flag';
+    flag.textContent = flagText;
+    labelRow.appendChild(flag);
   }
 
   const overlay = document.createElement('div');
@@ -787,7 +949,7 @@ function wireSelection(wrap, overlay, canvas, pageNum){
   function startDrawing(p){
     state = 'drawing';
     liveBox = document.createElement('div');
-    liveBox.className = 'rectBox' + (careMarkModeActive ? ' rectBox-care' : (nextMark === 'text' ? ' rectBox-text' : ''));
+    liveBox.className = 'rectBox' + (sheetMarkModeActive ? ' rectBox-sheet' : careMarkModeActive ? ' rectBox-care' : (nextMark === 'text' ? ' rectBox-text' : ''));
     liveBox.style.left = p.x+'px';
     liveBox.style.top = p.y+'px';
     overlay.appendChild(liveBox);
@@ -866,6 +1028,46 @@ function wireSelection(wrap, overlay, canvas, pageNum){
     cctx.imageSmoothingQuality = 'high';
     cctx.drawImage(canvas, x0*scaleX, y0*scaleY, wPx*scaleX, hPx*scaleY, 0, 0, cropCanvas.width, cropCanvas.height);
     const dataUrl = cropCanvas.toDataURL('image/png');
+
+    if(sheetMarkModeActive){
+      // One-shot: this single selection is OCR'd and parsed into the shared
+      // technical-sheet fields (photo mode only), then we return to the
+      // normal photo/text cycle without consuming a step of it.
+      sheetMarkModeActive = false;
+      const previousSheet = {...sheet}; // for undo
+
+      const tag = document.createElement('div');
+      tag.className = 'rectTag';
+      tag.textContent = 'ficha técnica';
+      liveBox.appendChild(tag);
+      const del = document.createElement('div');
+      del.className = 'rectDel';
+      del.textContent = '×';
+      liveBox.appendChild(del);
+      liveBox.classList.add('rectBox-sheet');
+
+      const thisBox = liveBox;
+      const removeThisSheetSelection = ()=>{
+        sheet = previousSheet;
+        renderFieldsPanel();
+        thisBox.remove();
+      };
+      let handled = false;
+      const removeHandler = (ev)=>{
+        ev.preventDefault(); ev.stopPropagation();
+        if(handled) return;
+        handled = true;
+        removeThisSheetSelection();
+      };
+      del.addEventListener('touchend', removeHandler, {passive:false});
+      del.addEventListener('click', removeHandler);
+      pushUndo({ undo: ()=>{ if(!handled){ handled = true; removeThisSheetSelection(); } } });
+
+      recognizeSheetFromImage(dataUrl);
+
+      liveBox = null;
+      return;
+    }
 
     if(careMarkModeActive){
       // One-shot: this single selection becomes the reusable care-icon crop,
@@ -1039,7 +1241,7 @@ function renderCropList(){
     item.innerHTML = `
       <img src="${v.photoDataUrl}">
       <div class="ci-info">
-        <div style="margin-bottom:3px;">Variante ${v.id.replace('variant_','#')} · pág. ${v.pageNum}<br>${ocrNote}</div>
+        <div style="margin-bottom:3px;">Variante ${v.id.replace('variant_','#')} · ${appMode === 'photo' ? 'foto' : 'pág.'} ${v.pageNum}<br>${ocrNote}</div>
         <input type="text" class="ci-name" data-id="${v.id}" placeholder="NOME DA VARIANTE (ex: G3753/209 CAMEL)" value="${(v.variantName||'').replace(/"/g,'&quot;')}">
       </div>
       <div class="ci-remove" data-id="${v.id}">remover</div>
@@ -1362,6 +1564,95 @@ document.getElementById('markCareBtn').addEventListener('click', ()=>{
   careMarkModeActive = true;
   document.getElementById('careIconsStatus').textContent = 'Modo roxo ativo: desenhe um retângulo sobre os ícones de lavagem em qualquer página do book.';
 });
+
+document.getElementById('markSheetBtn').addEventListener('click', ()=>{
+  sheetMarkModeActive = true;
+  document.getElementById('fieldsPanelNotePhoto').textContent = 'Modo azul ativo: desenhe um retângulo justo sobre 1-2 linhas da tabela (ex: só "Referência"). Quanto menor e mais reto o recorte, melhor a leitura.';
+});
+
+// ---------- Photo mode: OCR the technical-sheet tag and parse its fields ----------
+// The label tag in these physical swatch cards is a small ruled table with
+// one field per line ("PRODUTO ALFAIATARIA PARIS", "REFERENCIA BT-09", ...),
+// unlike the free-flowing PDF text extractFields() parses. This looks for
+// each known label at the start of an OCR'd line and takes the rest of that
+// line as the value.
+function parseSheetFieldsFromOcrText(text){
+  const lines = (text || '').split(/\n+/).map(l=>l.trim()).filter(Boolean);
+  const grabLine = (labelRe) => {
+    for(const line of lines){
+      const m = line.match(labelRe);
+      if(m) return m[1].replace(/^[:\|\-\s]+/, '').trim();
+    }
+    return '';
+  };
+  return {
+    nome: grabLine(/^PRODUTO\s*[:\|]?\s*(.+)/i),
+    ref: grabLine(/^REFER[ÊE]NCIA\s*[:\|]?\s*(.+)/i),
+    comp: grabLine(/^COMPOSI[ÇC][ÃA]O\s*[:\|]?\s*(.+)/i),
+    largura: grabLine(/^LARGURA\s*[:\|]?\s*(.+)/i),
+    gram: grabLine(/^GRAMATURA\s*[:\|]?\s*(.+)/i),
+    processo: grabLine(/^PROCESSO\s*[:\|]?\s*(.+)/i),
+  };
+}
+
+// Upscales a crop before OCR. Tesseract reads small photographed text (as
+// opposed to crisp PDF-rendered text) far more reliably when it's blown up
+// first — tested against real label photos, a tight 2-line crop went from
+// unreadable to a clean read once upscaled ~2.5x.
+function upscaleForOcr(dataUrl, factor){
+  return new Promise((resolve)=>{
+    const img = new Image();
+    img.onload = ()=>{
+      const cappedFactor = Math.min(factor, 2000/Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * cappedFactor);
+      c.height = Math.round(img.height * cappedFactor);
+      const ctx = c.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      resolve(c.toDataURL('image/png'));
+    };
+    img.onerror = ()=>resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+async function recognizeSheetFromImage(rawDataUrl){
+  const note = document.getElementById('fieldsPanelNotePhoto');
+  note.textContent = 'Lendo a ficha técnica da foto (OCR)...';
+  try{
+    const worker = await getTesseractWorker();
+    if(!worker){
+      diag.log('OCR indisponível para a ficha técnica — preencha manualmente.');
+      note.textContent = 'OCR indisponível neste ambiente — preencha os campos manualmente.';
+      return;
+    }
+    const dataUrl = await upscaleForOcr(rawDataUrl, 2.5);
+    const result = await worker.recognize(dataUrl);
+    const raw = result?.data?.text || '';
+    diag.log(`OCR da ficha técnica: "${raw.replace(/\n/g,' | ')}"`);
+    const parsed = parseSheetFieldsFromOcrText(raw);
+    // Only overwrite fields OCR actually found something for, so a partial
+    // read never blanks out something the user already typed/corrected.
+    sheet = {
+      nome: parsed.nome || sheet.nome || '',
+      ref: parsed.ref || sheet.ref || '',
+      comp: parsed.comp || sheet.comp || '',
+      largura: parsed.largura || sheet.largura || '',
+      gram: parsed.gram || sheet.gram || '',
+      processo: parsed.processo || sheet.processo || '',
+    };
+    renderFieldsPanel();
+    const foundCount = Object.values(parsed).filter(Boolean).length;
+    note.textContent = foundCount > 0
+      ? `Ficha técnica lida da foto (${foundCount}/6 campos) — confira e corrija o que precisar.`
+      : 'Não consegui ler nenhum campo automaticamente — preencha manualmente ou marque de novo, mais colado no texto.';
+  }catch(e){
+    diag.log('OCR da ficha técnica falhou: ' + e.message);
+    note.textContent = 'Não consegui ler a ficha técnica automaticamente — preencha os campos manualmente.';
+  }
+}
 
 // ---------- Automatic color-swatch detection ----------
 // Heuristic: fabric swatches in these catalogs are large, solid rectangular
