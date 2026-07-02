@@ -2,7 +2,7 @@
 // Caches all app assets on first visit so the app works offline after that.
 // Version bump (change CACHE_NAME) to force a cache refresh when you deploy updates.
 
-const CACHE_NAME = 'catalogo-v6';
+const CACHE_NAME = 'catalogo-v7';
 
 // Assets to pre-cache on install. The CDN libs are large so we cache them
 // on first fetch (not pre-cache) to keep the install fast.
