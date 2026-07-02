@@ -2095,11 +2095,19 @@ async function composeVariantImage(v){
   const padding = 24;
   const captionH = v.variantName ? 56 : 0;
 
-  let careImg = null, careH = 0;
+  let careImg = null, careH = 0, careDrawW = 0, careDrawH = 0;
   if(careIconDataUrl){
     careImg = await loadImageEl(careIconDataUrl);
-    const careTargetW = Math.min(photo.width * 0.4, careImg.width);
-    careH = careTargetW * (careImg.height / careImg.width) + 16; // +16 vertical padding
+    careDrawW = Math.min(photo.width * 0.4, careImg.width);
+    careDrawH = careDrawW * (careImg.height / careImg.width);
+    // Cap the height too — an unusually tall/narrow crop should shrink to
+    // fit rather than pushing the whole composed image out of proportion.
+    const maxCareDrawH = photo.height * 0.25;
+    if(careDrawH > maxCareDrawH){
+      careDrawH = maxCareDrawH;
+      careDrawW = careDrawH * (careImg.width / careImg.height);
+    }
+    careH = careDrawH + 16; // +16 vertical padding
   }
 
   const canvas = document.createElement('canvas');
@@ -2113,9 +2121,7 @@ async function composeVariantImage(v){
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   if(careImg){
-    const careW = Math.min(photo.width * 0.4, careImg.width);
-    const careDrawH = careW * (careImg.height / careImg.width);
-    ctx.drawImage(careImg, canvas.width - careW - 12, 8, careW, careDrawH);
+    ctx.drawImage(careImg, canvas.width - careDrawW - 12, 8, careDrawW, careDrawH);
   }
 
   ctx.drawImage(photo, 0, careH, photo.width, photo.height);
@@ -2223,6 +2229,9 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
 
       doc.setFont('helvetica','normal');
       doc.setFontSize(12);
+      const fieldsStartY = y; // remember where the field block starts, so the
+                               // care icon (placed on the right) can align
+                               // with it instead of the title above
       const lines = [
         [`Referência: `, s.ref],
         [`Comp: `, s.comp],
@@ -2242,9 +2251,19 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
       if(careIconDataUrl){
         try{
           const careProps = doc.getImageProperties(careIconDataUrl);
-          const careW = 150;
-          const careH = careW * (careProps.height/careProps.width);
-          doc.addImage(careIconDataUrl, 'PNG', pageW - marginX - careW, 60, careW, careH);
+          // Cap both dimensions (not just width) — a crop with an unusual
+          // aspect ratio (e.g. a tall, tight marking) could otherwise come
+          // out oversized and overlap the title above the field block.
+          const maxCareW = 160, maxCareH = 90;
+          let careW = maxCareW, careH = careW * (careProps.height / careProps.width);
+          if(careH > maxCareH){
+            careH = maxCareH;
+            careW = careH * (careProps.width / careProps.height);
+          }
+          // Aligns with the top of the field-label block (not the title
+          // above it) and grows downward, so it can never collide with the
+          // title regardless of the crop's aspect ratio.
+          doc.addImage(careIconDataUrl, 'PNG', pageW - marginX - careW, fieldsStartY - 14, careW, careH);
         }catch(e){ /* ignore icon placement failure */ }
       }
 
