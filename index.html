@@ -398,6 +398,90 @@
     flex-shrink:0;
     margin-top:2px;
   }
+  .libGroup{
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:12px;
+    margin-top:12px;
+  }
+  .libGroup-head{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:8px;
+    margin-bottom:10px;
+  }
+  .libGroup-title{
+    font-size:13px;
+    font-weight:600;
+  }
+  .libGroup-sub{
+    font-size:11.5px;
+    color:#6b6a64;
+    font-weight:400;
+  }
+  .libGroup-actions{
+    display:flex;
+    gap:6px;
+    flex-shrink:0;
+  }
+  .libGroup-actions button{
+    width:auto;
+    padding:5px 9px;
+    font-size:11px;
+  }
+  .libGrid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(84px, 1fr));
+    gap:8px;
+  }
+  .libThumb{
+    position:relative;
+    border:2px solid var(--line);
+    border-radius:8px;
+    overflow:hidden;
+    cursor:pointer;
+    background:#fff;
+  }
+  .libThumb.selected{
+    border-color:var(--accent);
+    box-shadow:0 0 0 2px var(--accent-soft);
+  }
+  .libThumb img{
+    display:block;
+    width:100%;
+    height:84px;
+    object-fit:cover;
+    background:#eee;
+  }
+  .libThumb .libCheck{
+    position:absolute;
+    top:4px; right:4px;
+    width:18px; height:18px;
+    border-radius:50%;
+    background:#fff;
+    border:1.5px solid var(--line);
+  }
+  .libThumb.selected .libCheck{
+    background:var(--accent);
+    border-color:var(--accent);
+  }
+  .libThumb.selected .libCheck::after{
+    content:'✓';
+    color:#fff;
+    font-size:12px;
+    display:block;
+    text-align:center;
+    line-height:16px;
+  }
+  .libThumb .libName{
+    font-size:9.5px;
+    color:#6b6a64;
+    padding:2px 4px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
   .empty-note{
     font-size:12.5px;
     color:#999;
@@ -452,12 +536,16 @@
     <div class="modeTabs" id="modeTabs">
       <button type="button" class="modeTab active" id="modePdfBtn">PDF do book</button>
       <button type="button" class="modeTab" id="modePhotoBtn">Fotos de etiqueta</button>
+      <button type="button" class="modeTab" id="modeLibraryBtn">Meus produtos</button>
     </div>
     <div class="panel" style="width:100%; max-width:640px;" id="pdfUploadPanel">
       <label class="drop" id="dropZone">
-        <input type="file" id="fileInput" accept="application/pdf">
-        <div class="drop-label">Arraste o PDF do book aqui ou <b>clique para escolher</b></div>
+        <input type="file" id="fileInput" accept="application/pdf" multiple>
+        <div class="drop-label">Arraste um ou mais PDFs de book aqui ou <b>clique para escolher</b></div>
       </label>
+      <div class="care-note">Pode selecionar vários arquivos de uma vez — cada um é processado por vez, na fila; salve cada produto no banco antes de passar para o próximo.</div>
+      <div class="care-note hidden" id="pdfQueueStatus" style="background:var(--accent-soft); color:var(--accent); font-weight:600;"></div>
+      <button id="skipQueueBtn" class="secondary hidden" style="margin-top:8px;">Pular para o próximo arquivo (sem salvar este)</button>
       <div class="status" id="status"></div>
       <span class="toggleDiag" id="toggleDiag">mostrar diagnóstico técnico ▾</span>
       <pre id="diagLog" class="diagLog hidden"></pre>
@@ -469,6 +557,17 @@
       </label>
       <div class="care-note">Selecione de uma vez todas as fotos das variações de cor de UM produto. Cada foto vira uma variante; a ficha técnica é lida uma única vez a partir da etiqueta marcada em azul.</div>
       <div class="status" id="photoStatus"></div>
+    </div>
+    <div class="panel hidden" style="width:100%; max-width:640px;" id="libraryPanel">
+      <b style="font-size:13px;">Produtos salvos</b>
+      <p class="sub" style="margin:8px 0;">Selecione as variantes (de um ou mais produtos) que quer juntar num PDF ou ZIP novo.</p>
+      <div class="status" id="libraryStatus"></div>
+      <div id="libraryList"></div>
+      <div style="margin-top:14px; display:flex; flex-direction:column; gap:8px;">
+        <button id="libraryGeneratePdfBtn">Gerar PDF com selecionados</button>
+        <button id="libraryGenerateZipBtn" class="secondary">Baixar imagens selecionadas (.zip)</button>
+      </div>
+      <div class="status" id="libraryGenStatus"></div>
     </div>
     <!-- rendered pages/photos get appended here -->
   </div>
@@ -521,10 +620,11 @@
       <div class="panel hidden" id="genPanel">
         <div class="step">3</div><b style="font-size:13px;">Gerar arquivos</b>
         <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+          <button id="saveProductBtn" class="secondary" style="background:#2f6fae; color:#fff; border-color:#2f6fae;">💾 Salvar produto no banco</button>
           <button id="generateBtn">Gerar PDF (1 página por variante)</button>
           <button id="generateZipBtn" class="secondary">Baixar imagens separadas (.zip)</button>
         </div>
-        <div class="care-note">Nome de cada imagem: NOME DO TECIDO_PROCESSO_NOME DA VARIANTE.png</div>
+        <div class="care-note">Nome de cada imagem: NOME DO TECIDO_PROCESSO_NOME DA VARIANTE.png. Salvar no banco deixa esse produto disponível na aba "Meus produtos" para combinar com outros depois.</div>
         <div class="status" id="genStatus"></div>
       </div>
     </div>
@@ -587,6 +687,60 @@ let careMarkModeActive = false; // true after the user clicks "Marcar manualment
 let sheetMarkModeActive = false; // true after "Marcar ficha técnica (azul)" in photo mode, consumes exactly one selection
 let undoStack = []; // most recent action last; each entry knows how to reverse itself
 let appMode = 'pdf'; // 'pdf' | 'photo' — which upload/extraction pipeline is active
+
+// ---------- Product database (IndexedDB) ----------
+// The app has no server, so "saved products" live in the browser's own
+// IndexedDB. Each saved product bundles everything needed to regenerate its
+// PDF/ZIP later: the technical sheet, the care-icon crop, and every variant
+// (photo + name). This is what powers "meus produtos": browsing, searching,
+// and combining several previously-saved products into one new PDF.
+const PRODUCTS_DB_NAME = 'catalogoVarianteDB';
+const PRODUCTS_DB_VERSION = 1;
+const PRODUCTS_STORE = 'products';
+
+function openProductsDB(){
+  return new Promise((resolve, reject)=>{
+    const req = indexedDB.open(PRODUCTS_DB_NAME, PRODUCTS_DB_VERSION);
+    req.onupgradeneeded = (e)=>{
+      const db = e.target.result;
+      if(!db.objectStoreNames.contains(PRODUCTS_STORE)){
+        db.createObjectStore(PRODUCTS_STORE, {keyPath:'id'});
+      }
+    };
+    req.onsuccess = ()=>resolve(req.result);
+    req.onerror = ()=>reject(req.error);
+  });
+}
+
+async function saveProductToDB(product){
+  const db = await openProductsDB();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(PRODUCTS_STORE, 'readwrite');
+    tx.objectStore(PRODUCTS_STORE).put(product);
+    tx.oncomplete = ()=>resolve();
+    tx.onerror = ()=>reject(tx.error);
+  });
+}
+
+async function listProductsFromDB(){
+  const db = await openProductsDB();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(PRODUCTS_STORE, 'readonly');
+    const req = tx.objectStore(PRODUCTS_STORE).getAll();
+    req.onsuccess = ()=>resolve(req.result || []);
+    req.onerror = ()=>reject(req.error);
+  });
+}
+
+async function deleteProductFromDB(id){
+  const db = await openProductsDB();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(PRODUCTS_STORE, 'readwrite');
+    tx.objectStore(PRODUCTS_STORE).delete(id);
+    tx.oncomplete = ()=>resolve();
+    tx.onerror = ()=>reject(tx.error);
+  });
+}
 
 function updateSheetCount(){
   document.getElementById('sheetCount').textContent = variants.length;
@@ -666,38 +820,92 @@ async function runOcrOnVariant(variant, textDataUrl){
 }
 
 // ---------- Drag & drop wiring ----------
+// Multiple PDFs can be selected at once (one product's book per file,
+// typically), but each still needs to be marked by hand — so they're
+// queued and processed one at a time: after the user saves (or skips) the
+// current one, the next file in the queue loads automatically.
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
+let pdfFileQueue = [];
+let pdfFileQueueIndex = 0;
+
+function startPdfQueue(files){
+  pdfFileQueue = Array.from(files).filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+  pdfFileQueueIndex = 0;
+  if(pdfFileQueue.length === 0) return;
+  processCurrentQueuedFile();
+}
+
+function processCurrentQueuedFile(){
+  if(pdfFileQueueIndex >= pdfFileQueue.length){
+    document.getElementById('pdfQueueStatus').classList.add('hidden');
+    return;
+  }
+  const file = pdfFileQueue[pdfFileQueueIndex];
+  const queueStatus = document.getElementById('pdfQueueStatus');
+  const skipBtn = document.getElementById('skipQueueBtn');
+  if(pdfFileQueue.length > 1){
+    queueStatus.classList.remove('hidden');
+    queueStatus.textContent = `Arquivo ${pdfFileQueueIndex+1} de ${pdfFileQueue.length}: ${file.name} — marque as variantes, salve o produto, e o próximo arquivo carrega sozinho.`;
+    skipBtn.classList.remove('hidden');
+  } else {
+    queueStatus.classList.add('hidden');
+    skipBtn.classList.add('hidden');
+  }
+  handleFile(file);
+}
+
+function advancePdfQueue(){
+  if(pdfFileQueue.length === 0) return false;
+  pdfFileQueueIndex++;
+  if(pdfFileQueueIndex < pdfFileQueue.length){
+    processCurrentQueuedFile();
+    return true;
+  }
+  document.getElementById('pdfQueueStatus').classList.add('hidden');
+  document.getElementById('skipQueueBtn').classList.add('hidden');
+  pdfFileQueue = [];
+  return false;
+}
+
+document.getElementById('skipQueueBtn').addEventListener('click', advancePdfQueue);
+
 dropZone.addEventListener('dragover', e=>{e.preventDefault(); dropZone.classList.add('drag');});
 dropZone.addEventListener('dragleave', ()=>dropZone.classList.remove('drag'));
 dropZone.addEventListener('drop', e=>{
   e.preventDefault();
   dropZone.classList.remove('drag');
-  if(e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+  if(e.dataTransfer.files.length) startPdfQueue(e.dataTransfer.files);
 });
 fileInput.addEventListener('change', e=>{
-  if(e.target.files.length) handleFile(e.target.files[0]);
+  if(e.target.files.length) startPdfQueue(e.target.files);
 });
 
-// ---------- Mode switch: PDF book vs. batch label photos ----------
+// ---------- Mode switch: PDF book vs. batch label photos vs. saved products ----------
 const modePdfBtn = document.getElementById('modePdfBtn');
 const modePhotoBtn = document.getElementById('modePhotoBtn');
+const modeLibraryBtn = document.getElementById('modeLibraryBtn');
 const pdfUploadPanel = document.getElementById('pdfUploadPanel');
 const photoUploadPanel = document.getElementById('photoUploadPanel');
+const libraryPanel = document.getElementById('libraryPanel');
 
 function setAppMode(mode){
   appMode = mode;
   modePdfBtn.classList.toggle('active', mode === 'pdf');
   modePhotoBtn.classList.toggle('active', mode === 'photo');
+  modeLibraryBtn.classList.toggle('active', mode === 'library');
   pdfUploadPanel.classList.toggle('hidden', mode !== 'pdf');
   photoUploadPanel.classList.toggle('hidden', mode !== 'photo');
+  libraryPanel.classList.toggle('hidden', mode !== 'library');
   document.getElementById('fieldsPanelNotePdf').classList.toggle('hidden', mode !== 'pdf');
   document.getElementById('fieldsPanelNotePhoto').classList.toggle('hidden', mode !== 'photo');
   document.getElementById('markSheetWrap').classList.toggle('hidden', mode !== 'photo');
   resetWorkspace();
+  if(mode === 'library') renderLibrary();
 }
 modePdfBtn.addEventListener('click', ()=>setAppMode('pdf'));
 modePhotoBtn.addEventListener('click', ()=>setAppMode('photo'));
+modeLibraryBtn.addEventListener('click', ()=>setAppMode('library'));
 
 // Clears everything currently loaded/marked so switching modes (or starting
 // a new upload) never mixes state from a previous PDF/photo batch.
@@ -727,7 +935,7 @@ function resetWorkspace(){
   cropsPanel.classList.add('hidden');
   genPanel.classList.add('hidden');
   Array.from(bookCol.children).forEach(el=>{
-    if(el.id !== 'modeTabs' && el.id !== 'pdfUploadPanel' && el.id !== 'photoUploadPanel') el.remove();
+    if(el.id !== 'modeTabs' && el.id !== 'pdfUploadPanel' && el.id !== 'photoUploadPanel' && el.id !== 'libraryPanel') el.remove();
   });
 }
 
@@ -2085,19 +2293,55 @@ function buildZipFilename(s){
   return base + '.zip';
 }
 
-// Composes the final per-variant image: the photo crop on top, with the
-// variant name re-drawn as sharp, crisp canvas text underneath — instead
-// of reusing the original pixelated/stretched legend crop. This is the
-// single source used by both the ZIP-of-images export and (rasterized
-// into the PDF) the PDF export, so the two outputs always match.
-async function composeVariantImage(v){
-  const photo = await loadImageEl(v.photoDataUrl);
+// Every generated variant page/image shows the photo at this exact
+// width:height ratio, regardless of how the user's own marking rectangle
+// was shaped — the source crop is scaled+center-cropped ("cover", not
+// stretched) to fill this frame, so every output page looks the same size
+// no matter how sloppy or tight a given selection was.
+const VARIANT_FRAME_RATIO = 3/4; // width:height
+const VARIANT_FRAME_PX_W = 900;  // used for the ZIP/PNG export canvas
+const VARIANT_FRAME_PX_H = Math.round(VARIANT_FRAME_PX_W / VARIANT_FRAME_RATIO);
+
+// Center-crops (never stretches) a source image into a canvas of exactly
+// targetW x targetH, "object-fit: cover" style, and returns a PNG data URL.
+async function cropImageToFrame(dataUrl, targetW, targetH){
+  const img = await loadImageEl(dataUrl);
+  const targetRatio = targetW / targetH;
+  const srcRatio = img.width / img.height;
+  let sx = 0, sy = 0, sw = img.width, sh = img.height;
+  if(srcRatio > targetRatio){
+    sw = img.height * targetRatio;
+    sx = (img.width - sw) / 2;
+  } else {
+    sh = img.width / targetRatio;
+    sy = (img.height - sh) / 2;
+  }
+  const c = document.createElement('canvas');
+  c.width = targetW; c.height = targetH;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, targetW, targetH);
+  return c.toDataURL('image/png');
+}
+
+// Composes the final per-variant image: the photo (cropped to the fixed
+// frame above) on top, with the variant name re-drawn as sharp, crisp
+// canvas text underneath — instead of reusing the original
+// pixelated/stretched legend crop. This is the single source used by both
+// the ZIP-of-images export and (rasterized into the PDF) the PDF export,
+// so the two outputs always match, and every variant's image comes out
+// the same size.
+async function composeVariantImage(v, careIconUrl){
+  const framedPhotoUrl = await cropImageToFrame(v.photoDataUrl, VARIANT_FRAME_PX_W, VARIANT_FRAME_PX_H);
+  const photo = await loadImageEl(framedPhotoUrl);
   const padding = 24;
   const captionH = v.variantName ? 56 : 0;
 
   let careImg = null, careH = 0, careDrawW = 0, careDrawH = 0;
-  if(careIconDataUrl){
-    careImg = await loadImageEl(careIconDataUrl);
+  const iconUrl = careIconUrl !== undefined ? careIconUrl : careIconDataUrl;
+  if(iconUrl){
+    careImg = await loadImageEl(iconUrl);
     careDrawW = Math.min(photo.width * 0.4, careImg.width);
     careDrawH = careDrawW * (careImg.height / careImg.width);
     // Cap the height too — an unusually tall/narrow crop should shrink to
@@ -2158,6 +2402,32 @@ function loadImageEl(src){
   });
 }
 
+document.getElementById('saveProductBtn').addEventListener('click', async ()=>{
+  if(variants.length === 0){
+    genStatus.textContent = 'Nenhuma variante selecionada ainda — marque ao menos uma foto no book.';
+    return;
+  }
+  genStatus.textContent = 'Salvando produto...';
+  try{
+    const s = currentSheet();
+    const product = {
+      id: 'product_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      nome: s.nome, ref: s.ref, comp: s.comp, largura: s.largura, gram: s.gram, processo: s.processo,
+      careIconDataUrl: careIconDataUrl || null,
+      variants: variants.map(v => ({variantName: v.variantName || '', photoDataUrl: v.photoDataUrl})),
+      createdAt: Date.now()
+    };
+    await saveProductToDB(product);
+    genStatus.textContent = `Produto "${s.nome || 'sem nome'}" salvo no banco (${variants.length} variante(s)). Já aparece na aba "Meus produtos".`;
+    // If this came from a multi-file queue, move on to the next PDF
+    // automatically — that's the whole point of queuing them up front.
+    advancePdfQueue();
+  }catch(err){
+    console.error(err);
+    genStatus.innerHTML = '<span style="color:#8a4b2e">Erro ao salvar o produto: ' + err.message + '</span>';
+  }
+});
+
 document.getElementById('generateZipBtn').addEventListener('click', async ()=>{
   if(variants.length === 0){
     genStatus.textContent = 'Nenhuma variante selecionada ainda — marque ao menos uma foto no book.';
@@ -2202,6 +2472,83 @@ document.getElementById('generateZipBtn').addEventListener('click', async ()=>{
 });
 
 // ---------- Generate final PDF: one page per variant, sheet repeated, variant name re-drawn as sharp text ----------
+// Fixed on-page size (in PDF points) for every variant's photo — same
+// VARIANT_FRAME_RATIO as the ZIP export, so a page generated from a huge
+// loose selection and a page generated from a tiny tight one come out
+// looking identical in size, only the framing/crop differs.
+const PDF_FRAME_W = 380;
+const PDF_FRAME_H = Math.round(PDF_FRAME_W / VARIANT_FRAME_RATIO);
+
+// Draws one variant's full page (title/fields/care icon/photo/caption) into
+// an already-created jsPDF document. Shared by the single-product "Gerar
+// PDF" button and the multi-product combined generator, so every page in
+// every PDF this app produces is laid out identically.
+async function drawVariantPageToPdf(doc, s, careIconUrl, v){
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const marginX = 48;
+  let y = 60;
+
+  doc.setFont('times','normal');
+  doc.setFontSize(26);
+  doc.text(s.nome || 'Tecido', pageW/2, y, {align:'center'});
+  y += 40;
+
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(12);
+  const fieldsStartY = y; // remember where the field block starts, so the
+                           // care icon (placed on the right) can align
+                           // with it instead of the title above
+  const lines = [
+    [`Referência: `, s.ref],
+    [`Comp: `, s.comp],
+    [`Largura: `, s.largura],
+    [`Gramatura: `, s.gram],
+    [`Processo: `, s.processo],
+  ];
+  lines.forEach(([label, val])=>{
+    doc.setFont('helvetica','normal');
+    doc.text(label, marginX, y);
+    const labelW = doc.getTextWidth(label);
+    doc.setFont('helvetica','bold');
+    doc.text(val || '—', marginX + labelW, y);
+    y += 20;
+  });
+
+  if(careIconUrl){
+    try{
+      const careProps = doc.getImageProperties(careIconUrl);
+      // Cap both dimensions (not just width) — a crop with an unusual
+      // aspect ratio (e.g. a tall, tight marking) could otherwise come
+      // out oversized and overlap the title above the field block.
+      const maxCareW = 160, maxCareH = 90;
+      let careW = maxCareW, careH = careW * (careProps.height / careProps.width);
+      if(careH > maxCareH){
+        careH = maxCareH;
+        careW = careH * (careProps.width / careProps.height);
+      }
+      // Aligns with the top of the field-label block (not the title
+      // above it) and grows downward, so it can never collide with the
+      // title regardless of the crop's aspect ratio.
+      doc.addImage(careIconUrl, 'PNG', pageW - marginX - careW, fieldsStartY - 14, careW, careH);
+    }catch(e){ /* ignore icon placement failure */ }
+  }
+
+  y += 20;
+
+  // Fixed-size frame, center-cropped (never stretched) — same size on
+  // every page regardless of how the source photo/selection was shaped.
+  const framedPhotoUrl = await cropImageToFrame(v.photoDataUrl, PDF_FRAME_W, PDF_FRAME_H);
+  const imgX = (pageW - PDF_FRAME_W) / 2;
+  doc.addImage(framedPhotoUrl, 'PNG', imgX, y, PDF_FRAME_W, PDF_FRAME_H);
+
+  if(v.variantName){
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(14);
+    doc.text(v.variantName, pageW/2, y + PDF_FRAME_H + 26, {align:'center'});
+  }
+}
+
 document.getElementById('generateBtn').addEventListener('click', async ()=>{
   if(variants.length === 0){
     genStatus.textContent = 'Nenhuma variante selecionada ainda — marque ao menos uma foto no book.';
@@ -2211,82 +2558,11 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
   try{
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({unit:'pt', format:'a4'});
-    const pageW = doc.internal.pageSize.getWidth();
-    const pageH = doc.internal.pageSize.getHeight();
     const s = currentSheet();
 
     for(let idx=0; idx<variants.length; idx++){
-      const v = variants[idx];
       if(idx>0) doc.addPage();
-
-      const marginX = 48;
-      let y = 60;
-
-      doc.setFont('times','normal');
-      doc.setFontSize(26);
-      doc.text(s.nome || 'Tecido', pageW/2, y, {align:'center'});
-      y += 40;
-
-      doc.setFont('helvetica','normal');
-      doc.setFontSize(12);
-      const fieldsStartY = y; // remember where the field block starts, so the
-                               // care icon (placed on the right) can align
-                               // with it instead of the title above
-      const lines = [
-        [`Referência: `, s.ref],
-        [`Comp: `, s.comp],
-        [`Largura: `, s.largura],
-        [`Gramatura: `, s.gram],
-        [`Processo: `, s.processo],
-      ];
-      lines.forEach(([label, val])=>{
-        doc.setFont('helvetica','normal');
-        doc.text(label, marginX, y);
-        const labelW = doc.getTextWidth(label);
-        doc.setFont('helvetica','bold');
-        doc.text(val || '—', marginX + labelW, y);
-        y += 20;
-      });
-
-      if(careIconDataUrl){
-        try{
-          const careProps = doc.getImageProperties(careIconDataUrl);
-          // Cap both dimensions (not just width) — a crop with an unusual
-          // aspect ratio (e.g. a tall, tight marking) could otherwise come
-          // out oversized and overlap the title above the field block.
-          const maxCareW = 160, maxCareH = 90;
-          let careW = maxCareW, careH = careW * (careProps.height / careProps.width);
-          if(careH > maxCareH){
-            careH = maxCareH;
-            careW = careH * (careProps.width / careProps.height);
-          }
-          // Aligns with the top of the field-label block (not the title
-          // above it) and grows downward, so it can never collide with the
-          // title regardless of the crop's aspect ratio.
-          doc.addImage(careIconDataUrl, 'PNG', pageW - marginX - careW, fieldsStartY - 14, careW, careH);
-        }catch(e){ /* ignore icon placement failure */ }
-      }
-
-      y += 20;
-
-      const imgProps = doc.getImageProperties(v.photoDataUrl);
-      const maxImgW = pageW - marginX*2;
-      const reservedForCaption = v.variantName ? 28 : 0;
-      const maxImgH = pageH - y - 50 - reservedForCaption;
-      let imgW = maxImgW;
-      let imgH = imgW * (imgProps.height/imgProps.width);
-      if(imgH > maxImgH){
-        imgH = maxImgH;
-        imgW = imgH * (imgProps.width/imgProps.height);
-      }
-      const imgX = (pageW - imgW)/2;
-      doc.addImage(v.photoDataUrl, 'PNG', imgX, y, imgW, imgH);
-
-      if(v.variantName){
-        doc.setFont('helvetica','normal');
-        doc.setFontSize(14);
-        doc.text(v.variantName, pageW/2, y + imgH + 26, {align:'center'});
-      }
+      await drawVariantPageToPdf(doc, s, careIconDataUrl, variants[idx]);
     }
 
     const blobUrl = doc.output('bloburl');
@@ -2296,6 +2572,184 @@ document.getElementById('generateBtn').addEventListener('click', async ()=>{
     console.error(err);
     genStatus.innerHTML = '<span style="color:#8a4b2e">Erro ao gerar PDF: ' + err.message + '</span>';
     diag.log('Erro PDF: ' + err.stack);
+  }
+});
+
+// ---------- "Meus produtos" library: browse, select, combine ----------
+// Selection keys are "productId::variantIndex" strings so the same Set can
+// hold picks from several different saved products at once — that's what
+// lets the combined PDF/ZIP below mix variants across products.
+let librarySelection = new Set();
+let libraryCache = []; // last list loaded from IndexedDB, reused by generate handlers
+
+async function renderLibrary(){
+  const statusEl = document.getElementById('libraryStatus');
+  const listEl = document.getElementById('libraryList');
+  statusEl.textContent = 'Carregando produtos salvos...';
+  listEl.innerHTML = '';
+  try{
+    libraryCache = await listProductsFromDB();
+  }catch(e){
+    statusEl.textContent = 'Não consegui abrir o banco de produtos: ' + e.message;
+    return;
+  }
+
+  if(libraryCache.length === 0){
+    statusEl.textContent = 'Nenhum produto salvo ainda. Marque um produto (PDF ou fotos) e clique em "Salvar produto no banco".';
+    return;
+  }
+
+  libraryCache.sort((a,b) => (b.createdAt||0) - (a.createdAt||0));
+  statusEl.textContent = `${libraryCache.length} produto(s) salvo(s). ${librarySelection.size} variante(s) selecionada(s).`;
+
+  libraryCache.forEach(product=>{
+    const group = document.createElement('div');
+    group.className = 'libGroup';
+
+    const head = document.createElement('div');
+    head.className = 'libGroup-head';
+    head.innerHTML = `
+      <div class="libGroup-title">${(product.nome || 'SEM NOME').toUpperCase()}
+        <div class="libGroup-sub">${[product.ref, product.processo].filter(Boolean).join(' · ') || '—'} · ${product.variants.length} variante(s)</div>
+      </div>
+    `;
+    const actions = document.createElement('div');
+    actions.className = 'libGroup-actions';
+    const selAllBtn = document.createElement('button');
+    selAllBtn.className = 'secondary';
+    selAllBtn.textContent = 'Selecionar todas';
+    selAllBtn.addEventListener('click', ()=>{
+      product.variants.forEach((v,i)=>librarySelection.add(product.id+'::'+i));
+      renderLibrary();
+    });
+    const delBtn = document.createElement('button');
+    delBtn.className = 'secondary';
+    delBtn.style.cssText = 'color:var(--warn); border-color:var(--warn);';
+    delBtn.textContent = 'Excluir produto';
+    delBtn.addEventListener('click', async ()=>{
+      if(!confirm(`Excluir o produto "${product.nome || 'sem nome'}" do banco? Isso não pode ser desfeito.`)) return;
+      await deleteProductFromDB(product.id);
+      product.variants.forEach((v,i)=>librarySelection.delete(product.id+'::'+i));
+      renderLibrary();
+    });
+    actions.appendChild(selAllBtn);
+    actions.appendChild(delBtn);
+    head.appendChild(actions);
+    group.appendChild(head);
+
+    const grid = document.createElement('div');
+    grid.className = 'libGrid';
+    product.variants.forEach((v, i)=>{
+      const key = product.id + '::' + i;
+      const thumb = document.createElement('div');
+      thumb.className = 'libThumb' + (librarySelection.has(key) ? ' selected' : '');
+      thumb.innerHTML = `
+        <img src="${v.photoDataUrl}">
+        <span class="libCheck"></span>
+        <div class="libName">${(v.variantName || 'sem nome').toUpperCase()}</div>
+      `;
+      thumb.addEventListener('click', ()=>{
+        if(librarySelection.has(key)) librarySelection.delete(key);
+        else librarySelection.add(key);
+        renderLibrary();
+      });
+      grid.appendChild(thumb);
+    });
+    group.appendChild(grid);
+    listEl.appendChild(group);
+  });
+}
+
+// Resolves the current librarySelection into a flat list of
+// {sheet, careIconDataUrl, variant} triples, each variant carrying its own
+// product's technical sheet and care icon (they can differ across the
+// products being combined).
+function getSelectedLibraryItems(){
+  const items = [];
+  for(const key of librarySelection){
+    const [productId, idxStr] = key.split('::');
+    const product = libraryCache.find(p => p.id === productId);
+    if(!product) continue;
+    const variant = product.variants[Number(idxStr)];
+    if(!variant) continue;
+    items.push({
+      sheet: {nome:product.nome, ref:product.ref, comp:product.comp, largura:product.largura, gram:product.gram, processo:product.processo},
+      careIconDataUrl: product.careIconDataUrl,
+      variant
+    });
+  }
+  return items;
+}
+
+document.getElementById('libraryGeneratePdfBtn').addEventListener('click', async ()=>{
+  const genStatusEl = document.getElementById('libraryGenStatus');
+  const items = getSelectedLibraryItems();
+  if(items.length === 0){
+    genStatusEl.textContent = 'Nenhuma variante selecionada — clique nas fotos que quer incluir.';
+    return;
+  }
+  genStatusEl.textContent = 'Gerando PDF combinado...';
+  try{
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({unit:'pt', format:'a4'});
+    for(let i=0; i<items.length; i++){
+      if(i>0) doc.addPage();
+      await drawVariantPageToPdf(doc, items[i].sheet, items[i].careIconDataUrl, items[i].variant);
+    }
+    const blobUrl = doc.output('bloburl');
+    genStatusEl.innerHTML = '';
+    const btn = document.createElement('a');
+    btn.href = blobUrl;
+    btn.download = 'CATALOGO COMBINADO.pdf';
+    btn.target = '_blank';
+    btn.textContent = `⬇ PDF com ${items.length} página(s)`;
+    btn.style.cssText = 'display:block; margin-top:10px; padding:12px 16px; background:#2c4a3e; color:#fff; border-radius:8px; font-weight:700; font-size:14px; text-decoration:none; text-align:center;';
+    genStatusEl.appendChild(btn);
+  }catch(err){
+    console.error(err);
+    genStatusEl.innerHTML = '<span style="color:#8a4b2e">Erro ao gerar PDF: ' + err.message + '</span>';
+  }
+});
+
+document.getElementById('libraryGenerateZipBtn').addEventListener('click', async ()=>{
+  const genStatusEl = document.getElementById('libraryGenStatus');
+  const items = getSelectedLibraryItems();
+  if(items.length === 0){
+    genStatusEl.textContent = 'Nenhuma variante selecionada — clique nas fotos que quer incluir.';
+    return;
+  }
+  if(typeof JSZip === 'undefined'){
+    genStatusEl.textContent = 'A biblioteca de compactação (JSZip) não carregou neste ambiente.';
+    return;
+  }
+  genStatusEl.textContent = 'Gerando imagens...';
+  try{
+    const zip = new JSZip();
+    const usedNames = new Set();
+    for(const item of items){
+      const composedDataUrl = await composeVariantImage(item.variant, item.careIconDataUrl);
+      let filename = buildFilenameForVariant(item.variant, item.sheet);
+      let unique = filename, n = 2;
+      while(usedNames.has(unique)){
+        unique = filename.replace(/\.png$/, `_${n}.png`);
+        n++;
+      }
+      usedNames.add(unique);
+      zip.file(unique, composedDataUrl.split(',')[1], {base64:true});
+    }
+    const blob = await zip.generateAsync({type:'blob'});
+    const blobUrl = URL.createObjectURL(blob);
+    genStatusEl.innerHTML = '';
+    const btn = document.createElement('a');
+    btn.href = blobUrl;
+    btn.download = 'CATALOGO COMBINADO.zip';
+    btn.target = '_blank';
+    btn.textContent = `⬇ ZIP com ${items.length} imagem(ns)`;
+    btn.style.cssText = 'display:block; margin-top:10px; padding:12px 16px; background:#2c4a3e; color:#fff; border-radius:8px; font-weight:700; font-size:14px; text-decoration:none; text-align:center;';
+    genStatusEl.appendChild(btn);
+  }catch(err){
+    console.error(err);
+    genStatusEl.innerHTML = '<span style="color:#8a4b2e">Erro ao gerar as imagens: ' + err.message + '</span>';
   }
 });
 
