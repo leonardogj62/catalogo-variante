@@ -1,8 +1,9 @@
 // Service Worker — Catálogo por Variante
 // Caches all app assets on first visit so the app works offline after that.
 // Version bump (change CACHE_NAME) to force a cache refresh when you deploy updates.
+// (re-deploy nudge: GitHub Pages CDN was stuck serving a stale build)
 
-const CACHE_NAME = 'catalogo-v9';
+const CACHE_NAME = 'catalogo-v10';
 
 // Assets to pre-cache on install. The CDN libs are large so we cache them
 // on first fetch (not pre-cache) to keep the install fast.
